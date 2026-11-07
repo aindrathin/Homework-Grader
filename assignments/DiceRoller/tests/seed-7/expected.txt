@@ -1,0 +1,6 @@
+How many rolls? Roll 1: 5
+Roll 2: 5
+Roll 3: 3
+Roll 4: 6
+Roll 5: 5
+Total: 24
