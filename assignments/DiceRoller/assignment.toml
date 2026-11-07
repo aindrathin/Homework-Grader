@@ -1,0 +1,4 @@
+# Settings for this assignment.
+main_class = "DiceRoller"   # class whose main method is run
+timeout_seconds = 5         # stop a program that runs longer than this
+# required_classes = ["DiceRoller", "Die"]   # for multi-file assignments
