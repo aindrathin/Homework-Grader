@@ -40,11 +40,18 @@ To grade an assignment:
    has an `assignment.toml`. After adding a new assignment, click **Refresh**.
 3. Click **Zip…** to choose the .zip, or **Folder…** to choose a folder you already extracted.
 4. If the assignment has no `expected.txt` files yet, click **Generate expected output**.
-5. Click **Run grader**. The progress bar fills in as students finish, and several students
-   are graded at once.
-6. Click a student's row to see notes, compiler errors, and line-by-line differences for each
-   test. Green rows passed every test, red rows missed at least one test, and orange rows
-   couldn't be tested at all.
+5. Click **Run grader**. Every student's name appears in the list on the left. The list fills
+   in as students finish, and several students are graded at once. A green row passed every
+   test, a yellow row passed some tests, and a red row passed none. A row is also red if the
+   code didn't compile. If the assignment has more than one test, the list shows how many
+   passed, such as `2/3`.
+6. Click a student's name. The expected output appears on the left and the student's output
+   on the right, lined up line by line. Lines that differ are red, and extra blank lines the
+   student printed are yellow. Spaces at the end of a line show as `·`. The box above shows
+   the student's notes, compiler errors, and crash messages. If the assignment has more than
+   one test, the student's tests appear as rows under their name: green with ✓ for passed,
+   red with ✗ for failed. The first failing test opens automatically and is shown in bold.
+   Click another test row to compare that test instead.
 7. Click **Export CSV** to save the results to a spreadsheet.
 
 ### Command line
@@ -115,7 +122,8 @@ Create a folder inside `assignments\`:
 
 ```
 MyAssignment/
-    assignment.toml      main_class = "Main"  (also: timeout_seconds, required_classes)
+    assignment.toml      main_class = "Main"
+                         (optional: timeout_seconds, required_classes, compare_lines)
     reference/           your solution's .java files
     tests/
         test1/
@@ -129,6 +137,11 @@ You can write `expected.txt` yourself, or put your solution in `reference/` and 
 
 The program's input is not echoed in the output, so `expected.txt` contains prompts like
 `Enter a number: ` followed directly by the next printed text.
+
+To grade only the start of the output, set `compare_lines`. For example, `compare_lines = 29`
+checks the first 29 lines exactly and ignores everything after them. The Song assignment
+uses this because students may print anything for verse 6. The details still show the
+unchecked part of each student's output.
 
 See `assignments/DiceRoller` and `examples/submittedWork` for a working example.
 

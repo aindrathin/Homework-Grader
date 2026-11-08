@@ -2,7 +2,8 @@
 
 Comparison is exact, character for character, after one normalization: Windows
 line endings (``\\r\\n``) are treated as ``\\n`` so expected files written on any
-computer compare the same way.
+computer compare the same way. If the assignment sets ``compare_lines``, only that
+many lines at the start of the output are compared (exactly); the rest is ignored.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ class TestResult:
     actual: str
     stderr: str = ""
     exit_code: int | None = None
+    compare_lines: int | None = None  # only this many lines were compared
 
     @property
     def passed(self) -> bool:
@@ -110,6 +112,16 @@ def normalize(text: str) -> str:
     return text.replace("\r\n", "\n")
 
 
+def first_lines(text: str, count: int | None) -> str:
+    """The first ``count`` lines of ``text``, each with its newline; all of it if None."""
+    if count is None:
+        return text
+    parts = text.split("\n")
+    if len(parts) <= count:
+        return text
+    return "\n".join(parts[:count]) + "\n"
+
+
 def read_expected(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -163,9 +175,14 @@ def compile_sources(src_dir: Path, classes_dir: Path) -> tuple[bool, str]:
 
 
 def run_test(
-    classes_dir: Path, run_dir: Path, main_class: str, test: TestCase, timeout: float
+    classes_dir: Path,
+    run_dir: Path,
+    main_class: str,
+    test: TestCase,
+    timeout: float,
+    compare_lines: int | None = None,
 ) -> TestResult:
-    """Run one test and compare its output with expected.txt."""
+    """Run one test and compare its output (or its first ``compare_lines`` lines)."""
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / f"{test.name}.out"
     err_path = run_dir / f"{test.name}.err"
@@ -213,8 +230,11 @@ def run_test(
     elif expected is None:
         status = NO_EXPECTED
     else:
-        status = PASS if actual == expected else FAIL
-    return TestResult(test.name, status, test.seed, expected, actual, stderr, exit_code)
+        same = first_lines(actual, compare_lines) == first_lines(expected, compare_lines)
+        status = PASS if same else FAIL
+    return TestResult(
+        test.name, status, test.seed, expected, actual, stderr, exit_code, compare_lines
+    )
 
 
 def _read_capped(path: Path) -> str:
@@ -260,6 +280,7 @@ def grade_submission(assignment: Assignment, submission: Submission) -> StudentR
                     assignment.main_class,
                     test,
                     assignment.timeout_seconds,
+                    assignment.compare_lines,
                 )
             )
     except Exception as e:  # keep grading the other students

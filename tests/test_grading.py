@@ -155,3 +155,39 @@ def test_infinite_loop_times_out(tmp_path):
     src = REFERENCE.replace("int n = in.nextInt();", "int n = in.nextInt(); while (n > -1) {}")
     r = grade_submission(a, _student(tmp_path, src))
     assert {t.status for t in r.tests} == {TIMEOUT}
+
+
+# --- compare_lines, using the real Song assignment ---------------------------
+
+SONG = Path(__file__).resolve().parents[1] / "assignments" / "Song"
+
+
+def _song_student(tmp_path: Path, src: str) -> Submission:
+    folder = tmp_path / "song_student"
+    folder.mkdir(exist_ok=True)
+    (folder / "Song.java").write_text(src)
+    return Submission("Sam", "Version 1", {"Song": folder / "Song.java"})
+
+
+@pytest.mark.parametrize(
+    ("change", "status"),
+    [
+        (lambda s: s, PASS),
+        (lambda s: s.replace('"Pig goes oink, oink,"', '"Cow goes moo, moo,"'), PASS),
+        (lambda s: s.replace("        pigVerse();\n", ""), PASS),
+        (lambda s: s.replace('"Duck goes quack, quack,"', '"Duck goes quack quack,"'), FAIL),
+        (
+            lambda s: s.replace(
+                "        duckVerse();\n        System.out.println();", "        duckVerse();"
+            ),
+            FAIL,
+        ),
+    ],
+    ids=["reference", "own-verse-6", "no-verse-6", "typo-in-verse-3-5", "missing-blank-line"],
+)
+def test_song_checks_only_first_five_verses(tmp_path, change, status):
+    a = load_assignment(SONG)
+    assert a.compare_lines == 29
+    src = change((SONG / "reference" / "Song.java").read_text())
+    r = grade_submission(a, _song_student(tmp_path, src))
+    assert [t.status for t in r.tests] == [status]
