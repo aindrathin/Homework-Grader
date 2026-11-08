@@ -6,6 +6,8 @@ Layout::
         assignment.toml          main_class = "DiceRoller"   (required)
                                  timeout_seconds = 10        (optional)
                                  required_classes = ["DiceRoller", "Die"]  (optional)
+                                 compare_lines = 29   (optional: check only the first
+                                                       29 lines of output)
         reference/               the teacher's solution (.java), used to generate expected output
         tests/
             <test name>/
@@ -44,6 +46,7 @@ class Assignment:
     timeout_seconds: float
     required_classes: list[str]
     tests: list[TestCase]
+    compare_lines: int | None = None  # None: compare all output
 
     @property
     def reference_dir(self) -> Path:
@@ -67,6 +70,11 @@ def load_assignment(root: Path) -> Assignment:
     required = list(config.get("required_classes", []))
     if main_class not in required:
         required.insert(0, main_class)
+    compare_lines = config.get("compare_lines")
+    if compare_lines is not None and (
+        not isinstance(compare_lines, int) or isinstance(compare_lines, bool) or compare_lines < 1
+    ):
+        raise AssignmentError("compare_lines in assignment.toml must be a whole number above 0")
 
     return Assignment(
         name=root.name,
@@ -75,6 +83,7 @@ def load_assignment(root: Path) -> Assignment:
         timeout_seconds=timeout,
         required_classes=required,
         tests=_load_tests(root / "tests"),
+        compare_lines=compare_lines,
     )
 
 

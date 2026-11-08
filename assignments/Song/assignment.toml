@@ -1,0 +1,7 @@
+# Settings for this assignment.
+main_class = "Song"         # class whose main method is run
+timeout_seconds = 5         # stop a program that runs longer than this
+
+# Only verses 1-5 are graded (the spec lets students print anything for verse 6).
+# Verses 1-5 are 25 lines plus 4 blank lines between them = 29 lines.
+compare_lines = 29

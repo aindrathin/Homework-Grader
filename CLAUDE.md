@@ -37,11 +37,11 @@ Run from the repo root in PowerShell:
 Flow: Teams export → `submissions.py` → `grading.py` (uses `rewrite.py`) → `report.py` → CLI (`cli.py`) or tkinter window (`gui.py`).
 
 - `submissions.py`: accepts a .zip or folder, finds `submittedWork/<student>/<version>/`, picks the version folder with the highest number, and maps each `.java` file to its class by the `public class` declaration (Teams renames resubmitted files like `Main 1.java`).
-- `assignment.py`: loads `assignment.toml` (`main_class`, `timeout_seconds`, `required_classes`) and `tests/<name>/{input.txt, expected.txt, seed.txt}`. `reference/` holds the teacher's solution.
+- `assignment.py`: loads `assignment.toml` (`main_class`, `timeout_seconds`, `required_classes`, `compare_lines`) and `tests/<name>/{input.txt, expected.txt, seed.txt}`. `reference/` holds the teacher's solution.
 - `rewrite.py`: edits a temp copy of each file. It routes `Math.random()`, `new Random(...)` and one-arg `Collections.shuffle` to one shared `Random` seeded by `-Dgrader.seed`, and strips `package` lines. Comments and strings are skipped via `javasource.split_segments`. Line numbers are preserved.
 - `grading.py`: per student, writes sources to a fresh temp dir, compiles once with `javac`, runs each test with stdin from `input.txt` and a timeout, and compares stdout to `expected.txt` exactly (only `\r\n` → `\n` is normalized). `generate_expected` runs `reference/` the same way to write expected files.
 
-Design decisions from the teacher: exact output matching; only the latest version is graded; randomness is controlled by per-test seeds so students can reproduce an expected file with `new Random(seed)` + `nextDouble()`; student code runs only in a temp folder with a timeout (no other sandbox).
+Design decisions from the teacher: exact output matching (an assignment may set `compare_lines` to check only the first N lines exactly, e.g. Song, where verse 6 is free-form; trailing blank lines are not ignored); only the latest version is graded; randomness is controlled by per-test seeds so students can reproduce an expected file with `new Random(seed)` + `nextDouble()`; student code runs only in a temp folder with a timeout (no other sandbox).
 
 ## Environment notes
 

@@ -6,7 +6,7 @@ import csv
 import difflib
 from pathlib import Path
 
-from .grading import StudentResult, TestResult
+from .grading import StudentResult, TestResult, first_lines
 
 
 def test_names(results: list[StudentResult]) -> list[str]:
@@ -50,7 +50,7 @@ def format_table(results: list[StudentResult]) -> str:
     return "\n".join(line.rstrip() for line in lines)
 
 
-def _visible(line: str) -> str:
+def show_whitespace(line: str) -> str:
     """Show trailing spaces as · and tabs as → so whitespace differences can be seen."""
     body = line.rstrip(" \t")
     return body + line[len(body) :].replace(" ", "·").replace("\t", "→")
@@ -73,8 +73,8 @@ def hint(expected: str, actual: str) -> str | None:
 
 def diff_text(expected: str, actual: str) -> str:
     diff = difflib.unified_diff(
-        [_visible(x) for x in expected.split("\n")],
-        [_visible(x) for x in actual.split("\n")],
+        [show_whitespace(x) for x in expected.split("\n")],
+        [show_whitespace(x) for x in actual.split("\n")],
         fromfile="expected",
         tofile="student output",
         lineterm="",
@@ -86,10 +86,16 @@ def diff_text(expected: str, actual: str) -> str:
 def describe_test(t: TestResult) -> str:
     seed = f", seed {t.seed}" if t.seed is not None else ""
     parts = [f"--- {t.name}{seed}: {t.status}"]
+    if t.compare_lines is not None:
+        parts.append(f"Only the first {t.compare_lines} lines of output are checked.")
     if t.status == "FAIL" and t.expected is not None:
-        if h := hint(t.expected, t.actual):
+        expected = first_lines(t.expected, t.compare_lines)
+        actual = first_lines(t.actual, t.compare_lines)
+        if h := hint(expected, actual):
             parts.append(f"Hint: {h}")
-        parts.append(diff_text(t.expected, t.actual))
+        parts.append(diff_text(expected, actual))
+        if actual != t.actual:
+            parts.append("Not checked (rest of the student output):\n" + t.actual[len(actual) :])
     elif not t.passed:
         if t.exit_code not in (None, 0):
             parts.append(f"Exit code {t.exit_code}")
