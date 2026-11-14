@@ -87,7 +87,7 @@ def result_level(r: StudentResult) -> str:
 
 
 def file_label(sub: Submission, class_name: str) -> str:
-    """How a student's file is named in the Code tab's file list."""
+    """How a student's file is named in the code pane's file list."""
     name = sub.files[class_name].name
     return name if name == f"{class_name}.java" else f"{name}  (class {class_name})"
 
@@ -133,8 +133,8 @@ class GraderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Homework Grader")
-        self.geometry("1200x760")
-        self.minsize(900, 550)
+        self.geometry("1600x800")
+        self.minsize(1100, 550)
 
         self.assignment_var = tk.StringVar()
         self.submissions_var = tk.StringVar()
@@ -147,7 +147,7 @@ class GraderApp(tk.Tk):
         self.submissions: dict[str, Submission] = {}
         # Teacher's edits, kept only in memory: student -> class -> source text.
         self.edits: dict[str, dict[str, str]] = {}
-        self.code_student: str | None = None  # whose code is in the Code tab
+        self.code_student: str | None = None  # whose code is in the code pane
         self.code_class: str | None = None  # which of their classes
         self.code_classes: list[str] = []  # the file list's classes, in order
         self.events: queue.Queue = queue.Queue()
@@ -201,12 +201,11 @@ class GraderApp(tk.Tk):
         right = ttk.PanedWindow(body, orient="vertical")
         body.add(right, weight=1)
         right.add(self._build_info(right), weight=0)
-        self.tabs = ttk.Notebook(right)
-        right.add(self.tabs, weight=1)
-        self.compare_tab = self._build_compare(self.tabs)
-        self.code_tab = self._build_code(self.tabs)
-        self.tabs.add(self.compare_tab, text="Output comparison")
-        self.tabs.add(self.code_tab, text="Code")
+        right.add(self._build_compare(right), weight=1)
+        # The student's code, in its own pane on the far right.
+        body.add(self._build_code(body), weight=1)
+        # Start the code pane at about 40% of the window, once the window has a size.
+        self.after(50, lambda: body.sashpos(1, int(body.winfo_width() * 0.6)))
 
     def _build_student_list(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent, width=300)
@@ -284,26 +283,29 @@ class GraderApp(tk.Tk):
         return frame
 
     def _build_code(self, parent) -> ttk.Frame:
-        frame = ttk.Frame(parent)
-        bar = ttk.Frame(frame)
-        bar.pack(fill="x", pady=(6, 4))
-        ttk.Label(bar, text="File:").pack(side="left")
-        self.code_file_box = ttk.Combobox(bar, state="readonly", width=40)
-        self.code_file_box.pack(side="left", padx=6)
+        frame = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        ttk.Label(frame, text="Student code", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        pick = ttk.Frame(frame)
+        pick.pack(fill="x", pady=(4, 2))
+        ttk.Label(pick, text="File:").pack(side="left")
+        self.code_file_box = ttk.Combobox(pick, state="readonly")
+        self.code_file_box.pack(side="left", fill="x", expand=True, padx=(6, 0))
         self.code_file_box.bind("<<ComboboxSelected>>", self._pick_code_file)
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", pady=(2, 2))
         self.rerun_button = ttk.Button(
             bar, text="Rerun tests for this student", command=self._rerun_student
         )
-        self.rerun_button.pack(side="left", padx=(6, 0))
+        self.rerun_button.pack(side="left")
         self.revert_button = ttk.Button(bar, text="Revert file", command=self._revert_code)
         self.revert_button.pack(side="left", padx=6)
-        self.code_state = ttk.Label(bar, foreground=MUTED)
-        self.code_state.pack(side="left", padx=6)
+        self.code_state = ttk.Label(frame, foreground=MUTED, font=("Segoe UI", 9, "bold"))
+        self.code_state.pack(anchor="w")
         ttk.Label(
-            bar,
+            frame,
             text="Edits stay in this window; the student's file is never changed.",
             foreground=MUTED,
-        ).pack(side="right")
+        ).pack(anchor="w", pady=(0, 4))
 
         box = ttk.Frame(frame)
         box.pack(fill="both", expand=True)
@@ -399,7 +401,7 @@ class GraderApp(tk.Tk):
         return self.code.get("1.0", "end-1c")
 
     def _store_code_edit(self) -> None:
-        """Remember the Code tab's text as an edit (or forget it if it matches the original)."""
+        """Remember the code pane's text as an edit (or forget it if it matches the original)."""
         student, cls = self.code_student, self.code_class
         if student is None or cls is None:
             return
@@ -448,7 +450,7 @@ class GraderApp(tk.Tk):
         self.rerun_button.configure(state="disabled")
 
     def _load_code(self, student: str) -> None:
-        """Show ``student``'s files in the Code tab (keeping any edits to the one shown)."""
+        """Show ``student``'s files in the code pane (keeping any edits to the one shown)."""
         if student == self.code_student:
             return
         self._store_code_edit()
@@ -667,8 +669,6 @@ class GraderApp(tk.Tk):
         self.students.see(r.student)
         self._show_selected()
         self._update_code_state()
-        if r.status == GRADED:
-            self.tabs.select(self.compare_tab)
 
     def _update_student_row(self, r: StudentResult) -> None:
         """Show ``r`` in the student list, replacing any earlier result's test rows."""
