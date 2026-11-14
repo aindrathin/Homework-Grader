@@ -300,3 +300,42 @@ def test_similar_class_name_is_renamed_for_grading(tmp_path, student_class):
     assert r.summary == "1/1 passed (renamed)"
     assert any(f"Renamed class {student_class} to Song" in n for n in r.notes)
     assert original.read_text() == src  # the student's file is never edited
+
+
+def test_edited_source_is_graded_and_marked(tmp_path, assignment):
+    """The teacher's edit (in memory) is graded; the student's file stays as it was."""
+    broken = REFERENCE.replace('"How many? "', '"How many?"')
+    sub = _student(tmp_path, broken)
+    assert grade_submission(assignment, sub).passed == 0
+
+    sub.sources = {"Roller": REFERENCE}
+    sub.edited = ["Roller"]
+    r = grade_submission(assignment, sub)
+    assert [t.status for t in r.tests] == [PASS, PASS]
+    assert r.edited == ["Roller"]
+    assert r.edited_sources == {"Roller": REFERENCE}
+    assert r.summary == "2/2 passed (edited)"
+    assert any("Graded with your edits to 'Roller.java'" in n for n in r.notes)
+    assert sub.files["Roller"].read_text() == broken
+
+
+def test_edited_source_follows_a_rename(tmp_path):
+    a = load_assignment(SONG)
+    src = (SONG / "reference" / "Song.java").read_text().replace("Song", "SongNew")
+    original = tmp_path / "SongNew.java"
+    original.write_text(src.replace("public static void main", "public static void mian"))
+    sub = Submission("Sam", "Version 1", {"SongNew": original}, sources={"SongNew": src})
+    sub.edited = ["SongNew"]
+    r = grade_submission(a, sub)
+    assert [t.status for t in r.tests] == [PASS]
+    assert r.summary == "1/1 passed (renamed) (edited)"
+
+
+def test_copied_source_keeps_windows_line_endings(tmp_path):
+    # Doubled "\r\r\n" endings make javac report every error on the wrong line.
+    from homework_grader.grading import prepare_sources
+
+    student = tmp_path / "Main.java"
+    student.write_bytes(b"public class Main {\r\n    int x\r\n}\r\n")
+    prepare_sources({"Main": student}, tmp_path / "src")
+    assert (tmp_path / "src" / "Main.java").read_bytes() == student.read_bytes()

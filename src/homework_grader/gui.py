@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -28,11 +29,14 @@ from .grading import (
     first_lines,
     generate_expected,
     grade_all,
+    grade_submission,
+    normalize,
     read_expected,
     read_input,
 )
 from .report import hint, show_whitespace, write_csv
-from .submissions import find_submissions, open_submissions
+from .settings import load_settings, save_settings
+from .submissions import Submission, find_submissions, open_submissions
 
 ALL_PASSED_BG = "#c6efce"  # student list: every test passed
 SOME_PASSED_BG = "#fff2a8"  # some tests passed
@@ -83,6 +87,23 @@ def result_level(r: StudentResult) -> str:
     return "some" if r.passed > 0 else "none"
 
 
+def file_label(sub: Submission, class_name: str) -> str:
+    """How a student's file is named in the code pane's file list."""
+    name = sub.files[class_name].name
+    return name if name == f"{class_name}.java" else f"{name}  (class {class_name})"
+
+
+def edited_submission(sub: Submission, edits: dict[str, str]) -> Submission:
+    """A copy of ``sub`` that grades ``edits`` (class -> source) instead of the student's code."""
+    edits = {c: text for c, text in edits.items() if c in sub.files}
+    return replace(
+        sub,
+        notes=list(sub.notes),
+        sources={**sub.sources, **edits},
+        edited=sorted(edits),
+    )
+
+
 def info_text(r: StudentResult, t: TestResult | None) -> str:
     """Everything about a student that isn't the output itself."""
     parts = [f"{r.student}   ({r.version or 'no version folder'})   {r.summary}"]
@@ -113,8 +134,8 @@ class GraderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Homework Grader")
-        self.geometry("1200x760")
-        self.minsize(900, 550)
+        self.geometry("1600x800")
+        self.minsize(1100, 550)
 
         self.assignment_var = tk.StringVar()
         self.submissions_var = tk.StringVar()
@@ -124,11 +145,46 @@ class GraderApp(tk.Tk):
         self.order: list[str] = []
         self.shown_student: str | None = None
         self.assignment: Assignment | None = None  # the one last graded
+        self.submissions: dict[str, Submission] = {}
+        # Teacher's edits, kept only in memory: student -> class -> source text.
+        self.edits: dict[str, dict[str, str]] = {}
+        self.code_student: str | None = None  # whose code is in the code pane
+        self.code_class: str | None = None  # which of their classes
+        self.code_classes: list[str] = []  # the file list's classes, in order
         self.events: queue.Queue = queue.Queue()
         self.busy = False
 
         self._build()
+        self._restore_choices()
+        self.assignment_var.trace_add("write", lambda *_: self._save_choices())
+        self.submissions_var.trace_add("write", lambda *_: self._save_choices())
         self.after(100, self._poll)
+
+    # ---------------------------------------------------------- remembered choices
+    def _restore_choices(self) -> None:
+        """Put back the assignment and submissions chosen the last time the window was used."""
+        saved = load_settings()
+        if saved.get("assignment") in self.assignments:
+            self.assignment_var.set(saved["assignment"])
+        submissions = saved.get("submissions", "")
+        if submissions and Path(submissions).exists():
+            self.submissions_var.set(submissions)
+
+    def _save_choices(self) -> None:
+        save_settings(
+            {
+                "assignment": self.assignment_var.get(),
+                "submissions": self.submissions_var.get().strip(),
+            }
+        )
+
+    def _picker_start_dir(self) -> str | None:
+        """Where the file pickers open: next to the last submissions, if that still exists."""
+        text = self.submissions_var.get().strip()
+        if not text:
+            return None
+        folder = Path(text).parent  # the folder holding the last .zip or submissions folder
+        return str(folder) if folder.is_dir() else None
 
     # ----------------------------------------------------------------- layout
     def _build(self) -> None:
@@ -176,6 +232,10 @@ class GraderApp(tk.Tk):
         body.add(right, weight=1)
         right.add(self._build_info(right), weight=0)
         right.add(self._build_compare(right), weight=1)
+        # The student's code, in its own pane on the far right.
+        body.add(self._build_code(body), weight=1)
+        # Start the code pane at about 40% of the window, once the window has a size.
+        self.after(50, lambda: body.sashpos(1, int(body.winfo_width() * 0.6)))
 
     def _build_student_list(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent, width=300)
@@ -252,6 +312,61 @@ class GraderApp(tk.Tk):
             text.configure(yscrollcommand=lambda f, last, o=other: self._synced(f, last, o))
         return frame
 
+    def _build_code(self, parent) -> ttk.Frame:
+        frame = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        ttk.Label(frame, text="Student code", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        pick = ttk.Frame(frame)
+        pick.pack(fill="x", pady=(4, 2))
+        ttk.Label(pick, text="File:").pack(side="left")
+        self.code_file_box = ttk.Combobox(pick, state="readonly")
+        self.code_file_box.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.code_file_box.bind("<<ComboboxSelected>>", self._pick_code_file)
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", pady=(2, 2))
+        self.rerun_button = ttk.Button(
+            bar, text="Rerun tests for this student", command=self._rerun_student
+        )
+        self.rerun_button.pack(side="left")
+        self.revert_button = ttk.Button(bar, text="Revert file", command=self._revert_code)
+        self.revert_button.pack(side="left", padx=6)
+        self.code_state = ttk.Label(frame, foreground=MUTED, font=("Segoe UI", 9, "bold"))
+        self.code_state.pack(anchor="w")
+        ttk.Label(
+            frame,
+            text="Edits stay in this window; the student's file is never changed.",
+            foreground=MUTED,
+        ).pack(anchor="w", pady=(0, 4))
+
+        box = ttk.Frame(frame)
+        box.pack(fill="both", expand=True)
+        self.code_lines = tk.Text(
+            box,
+            width=5,
+            font=MONO,
+            state="disabled",
+            takefocus=0,
+            foreground=MUTED,
+            background="#f4f4f4",
+            borderwidth=0,
+            padx=4,
+            cursor="arrow",
+        )
+        self.code = tk.Text(box, wrap="none", font=MONO, undo=True, maxundo=-1, tabs=("4c",))
+        ybar = ttk.Scrollbar(box, orient="vertical", command=self.code.yview)
+        xbar = ttk.Scrollbar(box, orient="horizontal", command=self.code.xview)
+        self.code.configure(
+            yscrollcommand=lambda f, last: self._code_scrolled(ybar, f, last),
+            xscrollcommand=xbar.set,
+        )
+        xbar.pack(side="bottom", fill="x")
+        ybar.pack(side="right", fill="y")
+        self.code_lines.pack(side="left", fill="y")
+        self.code.pack(side="left", fill="both", expand=True)
+        self.code_lines.bind("<MouseWheel>", self._code_lines_wheel)
+        self.code.bind("<<Modified>>", self._code_changed)
+        self._show_code_message("Choose a student to see their code.")
+        return frame
+
     def _output_text(self, parent, column: int) -> tk.Text:
         box = ttk.Frame(parent)
         box.grid(row=1, column=column, sticky="nsew", padx=(6 if column else 0, 0))
@@ -285,6 +400,160 @@ class GraderApp(tk.Tk):
         self._scroll_both("scroll", int(-event.delta / 120) * 3, "units")
         return "break"
 
+    # ------------------------------------------------------------- code tab
+    def _code_scrolled(self, bar: ttk.Scrollbar, first: str, last: str) -> None:
+        bar.set(first, last)
+        self.code_lines.yview_moveto(first)
+
+    def _code_lines_wheel(self, event) -> str:
+        self.code.yview_scroll(int(-event.delta / 120) * 3, "units")
+        return "break"
+
+    def _code_changed(self, _event=None) -> None:
+        if not self.code.edit_modified():
+            return
+        self.code.edit_modified(False)
+        self._number_code_lines()
+        self._update_code_state()
+
+    def _number_code_lines(self) -> None:
+        count = int(self.code.index("end-1c").split(".")[0]) if self.code_class else 0
+        self.code_lines.configure(state="normal")
+        self.code_lines.delete("1.0", "end")
+        self.code_lines.insert("1.0", "\n".join(f"{n:>4}" for n in range(1, count + 1)))
+        self.code_lines.configure(state="disabled")
+        self.code_lines.yview_moveto(self.code.yview()[0])
+
+    def _original_code(self, student: str, class_name: str) -> str:
+        return normalize(self.submissions[student].sources.get(class_name, ""))
+
+    def _current_code(self) -> str:
+        return self.code.get("1.0", "end-1c")
+
+    def _store_code_edit(self) -> None:
+        """Remember the code pane's text as an edit (or forget it if it matches the original)."""
+        student, cls = self.code_student, self.code_class
+        if student is None or cls is None:
+            return
+        text = self._current_code()
+        edits = self.edits.setdefault(student, {})
+        if text == self._original_code(student, cls):
+            edits.pop(cls, None)
+        else:
+            edits[cls] = text
+        if not edits:
+            del self.edits[student]
+
+    def _update_code_state(self) -> None:
+        student, cls = self.code_student, self.code_class
+        if student is None or cls is None:
+            self.code_state.configure(text="")
+            self.revert_button.configure(state="disabled")
+            return
+        text = self._current_code()
+        changed = text != self._original_code(student, cls)
+        result = self.results.get(student)
+        graded = (
+            result is not None and cls in result.edited and result.edited_sources.get(cls) == text
+        )
+        if not changed:
+            label = "Student's original code"
+        elif graded:
+            label = "Edited (these edits were graded)"
+        else:
+            label = "Edited, not rerun yet"
+        self.code_state.configure(text=label, foreground=FAIL_COLOR if changed else MUTED)
+        self.revert_button.configure(state="normal" if changed else "disabled")
+
+    def _show_code_message(self, message: str) -> None:
+        self.code_class = None
+        self.code_classes = []
+        self.code_file_box.configure(values=[])
+        self.code_file_box.set("")
+        self.code.configure(state="normal")
+        self.code.delete("1.0", "end")
+        self.code.insert("1.0", message)
+        self.code.configure(state="disabled")
+        self.code.edit_modified(False)
+        self._number_code_lines()
+        self._update_code_state()
+        self.rerun_button.configure(state="disabled")
+
+    def _load_code(self, student: str) -> None:
+        """Show ``student``'s files in the code pane (keeping any edits to the one shown)."""
+        if student == self.code_student:
+            return
+        self._store_code_edit()
+        self.code_student = student
+        sub = self.submissions.get(student)
+        if sub is None or not sub.files:
+            self._show_code_message("(No .java files were submitted.)")
+            return
+        main = self.assignment.main_class if self.assignment else None
+        self.code_classes = sorted(sub.files, key=lambda c: (c != main, c.lower()))
+        self.code_file_box.configure(values=[file_label(sub, c) for c in self.code_classes])
+        self._show_code_file(self.code_classes[0])
+        self.rerun_button.configure(state="disabled" if self.busy else "normal")
+
+    def _show_code_file(self, class_name: str) -> None:
+        student = self.code_student
+        assert student is not None
+        self.code_class = class_name
+        self.code_file_box.set(file_label(self.submissions[student], class_name))
+        text = self.edits.get(student, {}).get(class_name)
+        if text is None:
+            text = self._original_code(student, class_name)
+        self.code.configure(state="normal")
+        self.code.delete("1.0", "end")
+        self.code.insert("1.0", text)
+        self.code.edit_reset()
+        self.code.edit_modified(False)
+        self.code.mark_set("insert", "1.0")
+        self.code.yview_moveto(0)
+        self._number_code_lines()
+        self._update_code_state()
+
+    def _pick_code_file(self, _event=None) -> None:
+        index = self.code_file_box.current()
+        if index < 0 or self.code_student is None:
+            return
+        self._store_code_edit()
+        self._show_code_file(self.code_classes[index])
+
+    def _revert_code(self) -> None:
+        student, cls = self.code_student, self.code_class
+        if student is None or cls is None:
+            return
+        if not messagebox.askyesno(
+            "Revert file",
+            f"Throw away your edits to {self.submissions[student].files[cls].name} "
+            "and show the student's original code?",
+        ):
+            return
+        self.edits.get(student, {}).pop(cls, None)
+        if not self.edits.get(student):
+            self.edits.pop(student, None)
+        self._show_code_file(cls)
+
+    def _rerun_student(self) -> None:
+        student = self.code_student
+        if self.busy or student is None or self.assignment is None:
+            return
+        self._store_code_edit()
+        sub = edited_submission(self.submissions[student], self.edits.get(student, {}))
+        previous = self.results.get(student)
+        expected_reads = previous.expected_reads if previous else None
+        assignment = self.assignment
+        self._set_busy(True, f"Rerunning the tests for {student}…")
+
+        def work() -> None:
+            try:
+                self.events.put(("rerun", grade_submission(assignment, sub, expected_reads)))
+            except Exception as e:
+                self.events.put(("error", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
     # ----------------------------------------------------------------- pickers
     def _refresh_assignments(self) -> None:
         self.assignments = list_assignments()
@@ -297,13 +566,17 @@ class GraderApp(tk.Tk):
 
     def _pick_zip(self) -> None:
         path = filedialog.askopenfilename(
-            title="Choose the Teams submissions .zip", filetypes=[("Zip files", "*.zip")]
+            title="Choose the Teams submissions .zip",
+            filetypes=[("Zip files", "*.zip")],
+            initialdir=self._picker_start_dir(),
         )
         if path:
             self.submissions_var.set(path)
 
     def _pick_folder(self) -> None:
-        path = filedialog.askdirectory(title="Choose the extracted submissions folder")
+        path = filedialog.askdirectory(
+            title="Choose the extracted submissions folder", initialdir=self._picker_start_dir()
+        )
         if path:
             self.submissions_var.set(path)
 
@@ -335,6 +608,10 @@ class GraderApp(tk.Tk):
         self.assignment = assignment
         self.results.clear()
         self.order.clear()
+        self.submissions.clear()
+        self.edits.clear()
+        self.code_student = None
+        self._show_code_message("Choose a student to see their code.")
         self.students.delete(*self.students.get_children())
         self.test_rows.clear()
         self._clear_details()
@@ -405,15 +682,42 @@ class GraderApp(tk.Tk):
 
     def _on_students(self, subs) -> None:
         self.order = [s.student for s in subs]
+        self.submissions = {s.student: s for s in subs}
         for s in subs:
             self.students.insert("", "end", iid=s.student, text=s.student, values=("waiting…",))
         self.progress.configure(maximum=max(1, len(subs)), value=0)
         self.status_var.set(f"Grading {len(subs)} students…")
 
     def _on_result(self, r: StudentResult) -> None:
+        self._update_student_row(r)
+        self.progress.step(1)
+        if self.students.selection() == (r.student,):
+            self._show_selected()
+
+    def _on_rerun(self, r: StudentResult) -> None:
+        self._update_student_row(r)
+        self._set_busy(False, f"Reran {r.student}: {r.summary}")
+        # Show the new result (this also rebuilds the test rows that were replaced).
+        self.shown_student = None
+        self.students.selection_set(r.student)
+        self.students.see(r.student)
+        self._show_selected()
+        self._update_code_state()
+
+    def _update_student_row(self, r: StudentResult) -> None:
+        """Show ``r`` in the student list, replacing any earlier result's test rows."""
         self.results[r.student] = r
+        old_rows = self.students.get_children(r.student)
+        for row in old_rows:
+            self.test_rows.pop(row, None)
+            if row == self.shown_test:
+                self.shown_test = None
+        self.students.delete(*old_rows)
         count = len(self.assignment.tests) if self.assignment else len(r.tests)
-        self.students.item(r.student, values=(short_result(r, count),), tags=(result_level(r),))
+        name = f"{r.student}  (edited)" if r.edited else r.student
+        self.students.item(
+            r.student, text=name, values=(short_result(r, count),), tags=(result_level(r),)
+        )
         if count > 1:
             for i, t in enumerate(r.tests):
                 row = f"{r.student}::test{i}"
@@ -426,9 +730,6 @@ class GraderApp(tk.Tk):
                     values=(t.status,),
                     tags=("test_pass" if t.passed else "test_fail",),
                 )
-        self.progress.step(1)
-        if self.students.selection() == (r.student,):
-            self._show_selected()
 
     def _on_done(self, results: list[StudentResult]) -> None:
         full = sum(r.all_passed for r in results)
@@ -464,6 +765,7 @@ class GraderApp(tk.Tk):
             # Clicked the student: start on their first failing test.
             test = next((t for t in r.tests if not t.passed), r.tests[0] if r.tests else None)
         self.shown_student = student
+        self._load_code(student)
         self._expand_only(student)
         self._mark_shown_test(r, test)
 
@@ -572,6 +874,8 @@ class GraderApp(tk.Tk):
         state = "disabled" if busy else "normal"
         for b in (self.run_button, self.expected_button, self.csv_button):
             b.configure(state=state)
+        can_rerun = not busy and self.code_class is not None
+        self.rerun_button.configure(state="normal" if can_rerun else "disabled")
         if busy:
             self.progress.configure(value=0)
         self.status_var.set(status)
