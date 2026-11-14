@@ -63,3 +63,11 @@ def test_package_and_own_imports_removed_keeping_lines():
 def test_student_random_class_left_alone():
     out = rewrite_source("Random r = new Random();", seed_random_class=False).source
     assert out == "Random r = new Random();"
+
+
+def test_rename_changes_code_not_strings_or_comments():
+    src = 'public class SongNew { // SongNew\n  SongNew() { String s = "SongNew"; } SongNewer x; }'
+    out = rewrite_source(src, renames={"SongNew": "Song"}).source
+    assert (
+        out == 'public class Song { // SongNew\n  Song() { String s = "SongNew"; } SongNewer x; }'
+    )

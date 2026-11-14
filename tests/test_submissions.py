@@ -51,3 +51,27 @@ def test_zip_with_nested_submitted_work(tmp_path: Path):
         subs = find_submissions(root)
         assert [s.student for s in subs] == ["Ana", "Ben"]
         assert subs[1].files == {}
+
+
+def test_submission_folder_picks_one_assignment(tmp_path: Path):
+    _write(
+        tmp_path / "Sam" / "Assignment_ Song" / "Version 1" / "Song.java", "public class Song {}"
+    )
+    _write(
+        tmp_path / "Sam" / "Assignment_ Song" / "Version 2" / "Song 1.java",
+        "public class Song {} // v2",
+    )
+    _write(
+        tmp_path / "Sam" / "Gradanator" / "Version 5" / "Gradanator.java",
+        "public class Gradanator {}",
+    )
+    _write(
+        tmp_path / "Zoe" / "Gradanator" / "Version 1" / "Gradanator.java",
+        "public class Gradanator {}",
+    )
+    sam, zoe = find_submissions(tmp_path, "assignment_ song")
+    assert sam.version == "Version 2"
+    assert set(sam.files) == {"Song"}
+    assert "v2" in sam.files["Song"].read_text()
+    assert zoe.files == {}
+    assert zoe.notes == ["No 'assignment_ song' folder."]

@@ -7,6 +7,16 @@ Expected layout (inside a .zip or an extracted folder)::
             <Version 1>/  Main.java ...
             <Version 2>/  Main 1.java Helper.java ...   <- only the latest version is used
 
+Some exports hold every assignment for each student, one folder per assignment::
+
+    <Student Name>/
+        Assignment_ Song/
+            Version 1/  Song.java
+        Assignment_ Space Needle/ ...
+
+For these, pass the assignment's folder name (``submission_folder`` in
+assignment.toml) and only that folder is read for each student.
+
 Teams may append a number to a file name when a student resubmits (for example
 ``Main 1.java`` or ``Main (1).java``). Files are matched to classes by the
 ``public class`` declaration inside them, not by their file name.
@@ -76,20 +86,32 @@ def locate_submitted_work(root: Path) -> Path:
     return root
 
 
-def find_submissions(root: Path) -> list[Submission]:
-    """Return one Submission per student folder, using each student's latest version."""
+def find_submissions(root: Path, submission_folder: str | None = None) -> list[Submission]:
+    """Return one Submission per student folder, using each student's latest version.
+
+    If ``submission_folder`` is given, each student's versions are read from the
+    subfolder with that name (case is ignored); students without it get no files.
+    """
     work = locate_submitted_work(Path(root))
     result = []
     for student_dir in sorted(_subdirs(work), key=lambda p: p.name.lower()):
         notes: list[str] = []
-        versions = _subdirs(student_dir)
+        if submission_folder:
+            folder = _find_child(student_dir, submission_folder)
+            if folder is None:
+                notes.append(f"No '{submission_folder}' folder.")
+                result.append(Submission(student_dir.name, None, {}, notes))
+                continue
+        else:
+            folder = student_dir
+        versions = _subdirs(folder)
         if versions:
             latest = max(versions, key=_version_key)
             version: str | None = latest.name
             if len(versions) > 1:
                 notes.append(f"{len(versions)} versions submitted; graded '{latest.name}'.")
         else:
-            latest, version = student_dir, None
+            latest, version = folder, None
         files = collect_java_files(latest, notes)
         if not files:
             notes.append("No .java files in the latest submission.")
@@ -137,6 +159,11 @@ def _subdirs(folder: Path) -> list[Path]:
         for p in folder.iterdir()
         if p.is_dir() and not p.name.startswith(".") and p.name.lower() not in _IGNORED_DIRS
     ]
+
+
+def _find_child(folder: Path, name: str) -> Path | None:
+    wanted = name.strip().lower()
+    return next((p for p in _subdirs(folder) if p.name.strip().lower() == wanted), None)
 
 
 def _version_key(folder: Path) -> tuple[int, str]:

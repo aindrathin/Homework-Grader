@@ -8,6 +8,7 @@ many lines at the start of the output are compared (exactly); the rest is ignore
 
 from __future__ import annotations
 
+import difflib
 import glob
 import os
 import shutil
@@ -71,6 +72,7 @@ class StudentResult:
     tests: list[TestResult] = field(default_factory=list)
     compile_output: str = ""
     notes: list[str] = field(default_factory=list)
+    renamed: dict[str, str] = field(default_factory=dict)  # student's class -> required name
 
     @property
     def passed(self) -> int:
@@ -80,7 +82,8 @@ class StudentResult:
     def summary(self) -> str:
         if self.status != GRADED:
             return self.status
-        return f"{self.passed}/{len(self.tests)} passed"
+        summary = f"{self.passed}/{len(self.tests)} passed"
+        return summary + " (renamed)" if self.renamed else summary
 
     @property
     def all_passed(self) -> bool:
@@ -133,17 +136,49 @@ def read_expected(path: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def prepare_sources(files: dict[str, Path], src_dir: Path) -> list[str]:
-    """Write rewritten copies of ``files`` as ``<Class>.java`` in ``src_dir``; return notes."""
+def prepare_sources(
+    files: dict[str, Path], src_dir: Path, renames: dict[str, str] | None = None
+) -> list[str]:
+    """Write rewritten copies of ``files`` as ``<Class>.java`` in ``src_dir``; return notes.
+
+    ``files`` is keyed by the class name to write; ``renames`` (student's name ->
+    required name) is applied inside every copied file.
+    """
     src_dir.mkdir(parents=True, exist_ok=True)
     notes: list[str] = []
     own_random = "Random" in files
     for class_name, path in files.items():
-        result = rewrite_source(read_java(path), seed_random_class=not own_random)
+        result = rewrite_source(read_java(path), seed_random_class=not own_random, renames=renames)
         (src_dir / f"{class_name}.java").write_text(result.source, encoding="utf-8")
         notes.extend(f"{class_name}.java: {n}" for n in result.notes)
     (src_dir / f"{HELPER_CLASS}.java").write_text(HELPER_SOURCE, encoding="utf-8")
     return notes
+
+
+def find_renames(required: list[str], files: dict[str, Path]) -> dict[str, str]:
+    """Match each missing required class to one similarly named class the student wrote.
+
+    Similar means the same name ignoring case (``song``), one name starting with
+    the other (``SongNew``, ``Songshs``), or a close spelling (``Sogn``). A class is
+    only renamed when exactly one candidate fits, so a guess is never ambiguous.
+    Returns {student's class name: required class name}.
+    """
+    renames: dict[str, str] = {}
+    spare = [c for c in files if c not in required]
+    for need in (c for c in required if c not in files):
+        options = [c for c in spare if c not in renames]
+        same_case = [c for c in options if c.lower() == need.lower()]
+        candidates = same_case or [c for c in options if _similar(c, need)]
+        if len(candidates) == 1:
+            renames[candidates[0]] = need
+    return renames
+
+
+def _similar(a: str, b: str) -> bool:
+    a, b = a.lower(), b.lower()
+    if a.startswith(b) or b.startswith(a):
+        return min(len(a), len(b)) >= 3
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
 def compile_sources(src_dir: Path, classes_dir: Path) -> tuple[bool, str]:
@@ -258,7 +293,16 @@ def grade_submission(assignment: Assignment, submission: Submission) -> StudentR
     if not submission.files:
         result.status = NO_FILES
         return result
-    missing = [c for c in assignment.required_classes if c not in submission.files]
+    files = dict(submission.files)
+    renames = find_renames(assignment.required_classes, files)
+    for old, new in renames.items():
+        files[new] = files.pop(old)
+        result.notes.append(
+            f"Renamed class {old} to {new} ('{files[new].name}') so it could be graded. "
+            "Only the grader's copy was changed; the student's file is untouched."
+        )
+    result.renamed = renames
+    missing = [c for c in assignment.required_classes if c not in files]
     if missing:
         result.status = MISSING_CLASSES
         result.notes.append("Missing: " + ", ".join(f"{c}.java" for c in missing))
@@ -266,7 +310,7 @@ def grade_submission(assignment: Assignment, submission: Submission) -> StudentR
 
     workdir = Path(tempfile.mkdtemp(prefix="hwgrader_"))
     try:
-        result.notes += prepare_sources(submission.files, workdir / "src")
+        result.notes += prepare_sources(files, workdir / "src", renames)
         ok, output = compile_sources(workdir / "src", workdir / "classes")
         result.compile_output = output
         if not ok:

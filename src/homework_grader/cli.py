@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 def _grade(args: argparse.Namespace) -> int:
     assignment = load_assignment(args.assignment)
     with open_submissions(args.submissions) as root:
-        submissions = find_submissions(root)
+        submissions = find_submissions(root, assignment.submission_folder)
         if not submissions:
             print("No student folders found.", file=sys.stderr)
             return 1

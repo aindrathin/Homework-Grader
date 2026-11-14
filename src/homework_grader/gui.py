@@ -329,7 +329,7 @@ class GraderApp(tk.Tk):
         def work() -> None:
             try:
                 with open_submissions(subs_path) as root:
-                    subs = find_submissions(root)
+                    subs = find_submissions(root, assignment.submission_folder)
                     self.events.put(("students", subs))
                     results = grade_all(
                         assignment, subs, on_result=lambda r: self.events.put(("result", r))
