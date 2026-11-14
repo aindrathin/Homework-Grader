@@ -191,3 +191,73 @@ def test_song_checks_only_first_five_verses(tmp_path, change, status):
     src = change((SONG / "reference" / "Song.java").read_text())
     r = grade_submission(a, _song_student(tmp_path, src))
     assert [t.status for t in r.tests] == [status]
+
+
+# --- the real Gradanator assignment ------------------------------------------
+
+GRADANATOR = Path(__file__).resolve().parents[1] / "assignments" / "Gradanator"
+GRADANATOR_TESTS = [
+    "1-normal",
+    "2-premature-rounding",
+    "3-homework-extra-credit-cap",
+    "4-section-attendance-cap",
+    "5-exam-cap-and-shift",
+    "6-grade-boundary-60",
+]
+
+
+def _gradanator_student(tmp_path: Path, src: str) -> Submission:
+    folder = tmp_path / "gradanator_student"
+    folder.mkdir(exist_ok=True)
+    (folder / "Gradanator.java").write_text(src)
+    return Submission("Sam", "Version 1", {"Gradanator": folder / "Gradanator.java"})
+
+
+@pytest.mark.parametrize(
+    ("change", "failing"),
+    [
+        (lambda s: s, set()),
+        (lambda s: s.replace("Excellent work, keep it up!", "Wow!"), set()),
+        (
+            lambda s: s.replace(
+                "double weighted = (double) earned / possible * weight;",
+                "double weighted = Math.round((double) earned / possible * weight * 10) / 10.0;",
+            ),
+            {"2-premature-rounding"},
+        ),
+        (lambda s: s.replace("earned = Math.min(earned, possible);", ""), {GRADANATOR_TESTS[2]}),
+        (
+            lambda s: s.replace(
+                "Math.min(console.nextInt() * POINTS_PER_SECTION, SECTION_MAX)",
+                "console.nextInt() * POINTS_PER_SECTION",
+            ),
+            {"4-section-attendance-cap"},
+        ),
+        (
+            lambda s: s.replace("score = Math.min(score, EXAM_MAX);", ""),
+            {"1-normal", "5-exam-cap-and-shift"},
+        ),
+        (lambda s: s.replace("percentage >= 60", "percentage > 60"), {"6-grade-boundary-60"}),
+        (lambda s: s.replace('"Homework:"', '"Homework"'), set(GRADANATOR_TESTS)),
+    ],
+    ids=[
+        "reference",
+        "own-message",
+        "premature-rounding",
+        "no-homework-cap",
+        "no-section-cap",
+        "no-exam-cap",
+        "boundary-off-by-one",
+        "homework-no-colon",
+    ],
+)
+def test_gradanator_catches_mistakes(tmp_path, change, failing):
+    a = load_assignment(GRADANATOR)
+    assert [t.name for t in a.tests] == GRADANATOR_TESTS
+    assert a.compare_lines == 18
+    src = (GRADANATOR / "reference" / "Gradanator.java").read_text()
+    changed = change(src)
+    assert changed != src or not failing
+    r = grade_submission(a, _gradanator_student(tmp_path, changed))
+    assert {t.name for t in r.tests if t.status != PASS} == failing
+    assert {t.status for t in r.tests if t.status != PASS} <= {FAIL}

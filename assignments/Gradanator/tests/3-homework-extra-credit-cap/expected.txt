@@ -1,0 +1,19 @@
+This program reads exam/homework scores
+and reports your overall course grade.
+
+Midterm:
+Weight (0-100)? Score earned? Were scores shifted (1=yes, 2=no)? Total points = 70 / 100
+Weighted score = 17.5 / 25
+
+Final:
+Weight (0-100)? Score earned? Were scores shifted (1=yes, 2=no)? Total points = 80 / 100
+Weighted score = 20.0 / 25
+
+Homework:
+Weight (0-100)? Number of assignments? Assignment 1 score and max? Assignment 2 score and max? Assignment 3 score and max? How many sections did you attend? Section points = 25 / 30
+Total points = 150 / 150
+Weighted score = 50.0 / 50
+
+Overall percentage = 87.5
+Your grade will be at least: 3.0
+<< your custom grade message here >>
