@@ -166,7 +166,10 @@ def prepare_sources(
     for class_name, path in files.items():
         source = texts[class_name] if class_name in texts else read_java(path)
         result = rewrite_source(source, seed_random_class=not own_random, renames=renames)
-        (src_dir / f"{class_name}.java").write_text(result.source, encoding="utf-8")
+        # newline="": keep the student's line endings as they are. Text mode on
+        # Windows would turn "\r\n" into "\r\r\n", which javac counts as two lines,
+        # so compile errors would point at the wrong line.
+        (src_dir / f"{class_name}.java").write_text(result.source, encoding="utf-8", newline="")
         notes.extend(f"{class_name}.java: {n}" for n in result.notes)
     (src_dir / f"{HELPER_CLASS}.java").write_text(HELPER_SOURCE, encoding="utf-8")
     (src_dir / f"{LAUNCHER_CLASS}.java").write_text(LAUNCHER_SOURCE, encoding="utf-8")

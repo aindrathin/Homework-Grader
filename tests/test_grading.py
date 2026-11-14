@@ -329,3 +329,13 @@ def test_edited_source_follows_a_rename(tmp_path):
     r = grade_submission(a, sub)
     assert [t.status for t in r.tests] == [PASS]
     assert r.summary == "1/1 passed (renamed) (edited)"
+
+
+def test_copied_source_keeps_windows_line_endings(tmp_path):
+    # Doubled "\r\r\n" endings make javac report every error on the wrong line.
+    from homework_grader.grading import prepare_sources
+
+    student = tmp_path / "Main.java"
+    student.write_bytes(b"public class Main {\r\n    int x\r\n}\r\n")
+    prepare_sources({"Main": student}, tmp_path / "src")
+    assert (tmp_path / "src" / "Main.java").read_bytes() == student.read_bytes()
