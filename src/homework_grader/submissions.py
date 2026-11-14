@@ -56,6 +56,10 @@ class Submission:
     version: str | None
     files: dict[str, Path]  # class name -> source file
     notes: list[str] = field(default_factory=list)
+    # Class name -> source text. Read while the files exist (a .zip is only extracted
+    # for a moment), and graded instead of the file when present.
+    sources: dict[str, str] = field(default_factory=dict)
+    edited: list[str] = field(default_factory=list)  # classes the teacher changed in ``sources``
 
 
 @contextmanager
@@ -115,7 +119,8 @@ def find_submissions(root: Path, submission_folder: str | None = None) -> list[S
         files = collect_java_files(latest, notes)
         if not files:
             notes.append("No .java files in the latest submission.")
-        result.append(Submission(student_dir.name, version, files, notes))
+        sources = {name: read_java(path) for name, path in files.items()}
+        result.append(Submission(student_dir.name, version, files, notes, sources))
     return result
 
 

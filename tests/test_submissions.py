@@ -75,3 +75,10 @@ def test_submission_folder_picks_one_assignment(tmp_path: Path):
     assert "v2" in sam.files["Song"].read_text()
     assert zoe.files == {}
     assert zoe.notes == ["No 'assignment_ song' folder."]
+
+
+def test_sources_are_read_into_memory(tmp_path: Path):
+    _write(tmp_path / "submittedWork" / "Sam" / "Version 1" / "Main 1.java", "public class Main {}")
+    [sub] = find_submissions(tmp_path)
+    assert sub.sources == {"Main": "public class Main {}"}
+    assert sub.edited == []

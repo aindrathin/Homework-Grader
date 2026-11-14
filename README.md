@@ -52,7 +52,16 @@ To grade an assignment:
    one test, the student's tests appear as rows under their name: green with ✓ for passed,
    red with ✗ for failed. The first failing test opens automatically and is shown in bold.
    Click another test row to compare that test instead.
-7. Click **Export CSV** to save the results to a spreadsheet.
+7. To look at or fix a student's code, open the **Code** tab below the notes box. It shows
+   the selected student's submitted `.java` files with line numbers, so you can match them
+   to compiler errors. Pick a file from the **File** list. You can type in the code
+   directly. Click **Rerun tests for this student** to grade only that student again with
+   your changes. The window switches back to the output comparison, the student's row
+   updates, and it is marked `(edited)`. The summary and the CSV also say `(edited)`.
+   **Revert file** puts the student's original code back. Your edits are kept only in the
+   window and never change the student's files. They are cleared when you click
+   **Run grader** again or close the window.
+8. Click **Export CSV** to save the results to a spreadsheet.
 
 ### Command line
 

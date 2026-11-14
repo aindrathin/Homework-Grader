@@ -76,6 +76,8 @@ class StudentResult:
     compile_output: str = ""
     notes: list[str] = field(default_factory=list)
     renamed: dict[str, str] = field(default_factory=dict)  # student's class -> required name
+    edited: list[str] = field(default_factory=list)  # classes graded with the teacher's edits
+    edited_sources: dict[str, str] = field(default_factory=dict)  # class -> edited text graded
     # Where the reference solution read its input, by test name (for the expected side).
     expected_reads: dict[str, Reads] = field(default_factory=dict)
 
@@ -88,7 +90,11 @@ class StudentResult:
         if self.status != GRADED:
             return self.status
         summary = f"{self.passed}/{len(self.tests)} passed"
-        return summary + " (renamed)" if self.renamed else summary
+        if self.renamed:
+            summary += " (renamed)"
+        if self.edited:
+            summary += " (edited)"
+        return summary
 
     @property
     def all_passed(self) -> bool:
@@ -142,18 +148,24 @@ def read_expected(path: Path) -> str | None:
 
 
 def prepare_sources(
-    files: dict[str, Path], src_dir: Path, renames: dict[str, str] | None = None
+    files: dict[str, Path],
+    src_dir: Path,
+    renames: dict[str, str] | None = None,
+    texts: dict[str, str] | None = None,
 ) -> list[str]:
     """Write rewritten copies of ``files`` as ``<Class>.java`` in ``src_dir``; return notes.
 
     ``files`` is keyed by the class name to write; ``renames`` (student's name ->
-    required name) is applied inside every copied file.
+    required name) is applied inside every copied file. ``texts`` (same keys) gives
+    source text to use instead of reading the file.
     """
     src_dir.mkdir(parents=True, exist_ok=True)
     notes: list[str] = []
     own_random = "Random" in files
+    texts = texts or {}
     for class_name, path in files.items():
-        result = rewrite_source(read_java(path), seed_random_class=not own_random, renames=renames)
+        source = texts[class_name] if class_name in texts else read_java(path)
+        result = rewrite_source(source, seed_random_class=not own_random, renames=renames)
         (src_dir / f"{class_name}.java").write_text(result.source, encoding="utf-8")
         notes.extend(f"{class_name}.java: {n}" for n in result.notes)
     (src_dir / f"{HELPER_CLASS}.java").write_text(HELPER_SOURCE, encoding="utf-8")
@@ -329,14 +341,22 @@ def grade_submission(
         result.status = NO_FILES
         return result
     files = dict(submission.files)
+    texts = dict(submission.sources)
     renames = find_renames(assignment.required_classes, files)
     for old, new in renames.items():
         files[new] = files.pop(old)
+        if old in texts:
+            texts[new] = texts.pop(old)
         result.notes.append(
             f"Renamed class {old} to {new} ('{files[new].name}') so it could be graded. "
             "Only the grader's copy was changed; the student's file is untouched."
         )
     result.renamed = renames
+    result.edited = list(submission.edited)
+    result.edited_sources = {c: submission.sources[c] for c in submission.edited}
+    if submission.edited:
+        names = ", ".join(f"'{submission.files[c].name}'" for c in submission.edited)
+        result.notes.append(f"Graded with your edits to {names}. The student's file is untouched.")
     missing = [c for c in assignment.required_classes if c not in files]
     if missing:
         result.status = MISSING_CLASSES
@@ -345,7 +365,7 @@ def grade_submission(
 
     workdir = Path(tempfile.mkdtemp(prefix="hwgrader_"))
     try:
-        result.notes += prepare_sources(files, workdir / "src", renames)
+        result.notes += prepare_sources(files, workdir / "src", renames, texts)
         ok, output = compile_sources(workdir / "src", workdir / "classes")
         result.compile_output = output
         if not ok:
