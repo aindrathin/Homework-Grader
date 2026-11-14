@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .assignment import Assignment, TestCase
 from .javasource import read_java
+from .launcher import LAUNCHER_CLASS, LAUNCHER_SOURCE, Reads, read_input_log
 from .rewrite import HELPER_CLASS, HELPER_SOURCE, rewrite_source
 from .submissions import Submission, collect_java_files
 
@@ -58,6 +59,8 @@ class TestResult:
     stderr: str = ""
     exit_code: int | None = None
     compare_lines: int | None = None  # only this many lines were compared
+    input: str | None = None  # what was typed into the program (input.txt), if anything
+    input_reads: Reads | None = None  # where in ``actual`` each piece of input was read
 
     @property
     def passed(self) -> bool:
@@ -73,6 +76,8 @@ class StudentResult:
     compile_output: str = ""
     notes: list[str] = field(default_factory=list)
     renamed: dict[str, str] = field(default_factory=dict)  # student's class -> required name
+    # Where the reference solution read its input, by test name (for the expected side).
+    expected_reads: dict[str, Reads] = field(default_factory=dict)
 
     @property
     def passed(self) -> int:
@@ -152,6 +157,7 @@ def prepare_sources(
         (src_dir / f"{class_name}.java").write_text(result.source, encoding="utf-8")
         notes.extend(f"{class_name}.java: {n}" for n in result.notes)
     (src_dir / f"{HELPER_CLASS}.java").write_text(HELPER_SOURCE, encoding="utf-8")
+    (src_dir / f"{LAUNCHER_CLASS}.java").write_text(LAUNCHER_SOURCE, encoding="utf-8")
     return notes
 
 
@@ -221,6 +227,7 @@ def run_test(
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / f"{test.name}.out"
     err_path = run_dir / f"{test.name}.err"
+    log_path = run_dir / f"{test.name}.reads"
     cmd = [
         find_java_tool("java"),
         "-Xmx256m",
@@ -230,7 +237,8 @@ def run_test(
     ]
     if test.seed is not None:
         cmd.append(f"-Dgrader.seed={test.seed}")
-    cmd += ["-cp", str(classes_dir), main_class]
+    # The launcher runs main_class and logs where input is read (see launcher.py).
+    cmd += [f"-Dgrader.inputlog={log_path}", "-cp", str(classes_dir), LAUNCHER_CLASS, main_class]
 
     exit_code: int | None = None
     timed_out = False
@@ -255,6 +263,9 @@ def run_test(
             stdin.close()
 
     actual = _read_capped(out_path)
+    input_bytes = test.input_path.read_bytes() if test.input_path else b""
+    with open(out_path, "rb") as f:
+        reads = read_input_log(log_path, f.read(MAX_OUTPUT_BYTES), input_bytes)
     stderr = _read_capped(err_path)
     expected = read_expected(test.expected_path)
 
@@ -268,8 +279,24 @@ def run_test(
         same = first_lines(actual, compare_lines) == first_lines(expected, compare_lines)
         status = PASS if same else FAIL
     return TestResult(
-        test.name, status, test.seed, expected, actual, stderr, exit_code, compare_lines
+        test.name,
+        status,
+        test.seed,
+        expected,
+        actual,
+        stderr,
+        exit_code,
+        compare_lines,
+        read_input(test.input_path),
+        reads,
     )
+
+
+def read_input(path: Path | None) -> str | None:
+    """The test's input.txt with Windows line endings normalized, or None if there is none."""
+    if path is None or not path.is_file():
+        return None
+    return normalize(path.read_bytes().decode("utf-8-sig", errors="replace"))
 
 
 def _read_capped(path: Path) -> str:
@@ -286,9 +313,17 @@ def _read_capped(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def grade_submission(assignment: Assignment, submission: Submission) -> StudentResult:
+def grade_submission(
+    assignment: Assignment,
+    submission: Submission,
+    expected_reads: dict[str, Reads] | None = None,
+) -> StudentResult:
     result = StudentResult(
-        submission.student, submission.version, GRADED, notes=list(submission.notes)
+        submission.student,
+        submission.version,
+        GRADED,
+        notes=list(submission.notes),
+        expected_reads=dict(expected_reads or {}),
     )
     if not submission.files:
         result.status = NO_FILES
@@ -345,15 +380,57 @@ def grade_all(
     find_java_tool("javac")  # fail fast with a clear message
     find_java_tool("java")
     submissions = list(submissions)
+    expected_reads = reference_reads(assignment)
 
     def work(sub: Submission) -> StudentResult:
-        r = grade_submission(assignment, sub)
+        r = grade_submission(assignment, sub, expected_reads)
         if on_result:
             on_result(r)
         return r
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         return list(pool.map(work, submissions))
+
+
+def reference_reads(assignment: Assignment) -> dict[str, Reads]:
+    """Run the reference solution on every test to see where it reads its input.
+
+    Used to show input in the expected output. A test is left out when the
+    reference's output doesn't match its expected.txt (then the read positions
+    wouldn't line up), or when anything goes wrong; the window then lists that
+    test's input above the expected output instead.
+    """
+    ref = assignment.reference_dir
+    if not ref.is_dir() or not any(t.input_path for t in assignment.tests):
+        return {}
+    files = collect_java_files(ref, [])
+    if any(c not in files for c in assignment.required_classes):
+        return {}
+    found: dict[str, Reads] = {}
+    workdir = Path(tempfile.mkdtemp(prefix="hwgrader_ref_"))
+    try:
+        prepare_sources(files, workdir / "src")
+        ok, _ = compile_sources(workdir / "src", workdir / "classes")
+        if not ok:
+            return {}
+        for test in assignment.tests:
+            if not test.input_path:
+                continue
+            r = run_test(
+                workdir / "classes",
+                workdir / "run",
+                assignment.main_class,
+                test,
+                assignment.timeout_seconds,
+                assignment.compare_lines,
+            )
+            if r.status == PASS and r.input_reads is not None:
+                found[test.name] = r.input_reads
+    except Exception:  # only affects how input is shown, never the grades
+        return found
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    return found
 
 
 def generate_expected(assignment: Assignment, overwrite: bool = False) -> list[str]:

@@ -88,6 +88,8 @@ def describe_test(t: TestResult) -> str:
     parts = [f"--- {t.name}{seed}: {t.status}"]
     if t.compare_lines is not None:
         parts.append(f"Only the first {t.compare_lines} lines of output are checked.")
+    if t.input:
+        parts.append("Input:\n" + t.input.rstrip("\n"))
     if t.status == "FAIL" and t.expected is not None:
         expected = first_lines(t.expected, t.compare_lines)
         actual = first_lines(t.actual, t.compare_lines)
