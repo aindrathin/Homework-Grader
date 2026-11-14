@@ -24,7 +24,7 @@ def write_csv(results: list[StudentResult], path: Path) -> None:
         w = csv.writer(f)
         w.writerow(["Student", "Version", "Result", "Passed", "Total", *names, "Notes"])
         for r in results:
-            by_name = {t.name: t.status for t in r.tests}
+            by_name = {t.name: t.shown_status for t in r.tests}
             w.writerow(
                 [
                     r.student,
@@ -42,7 +42,7 @@ def format_table(results: list[StudentResult]) -> str:
     names = test_names(results)
     rows = [["Student", "Version", "Result", *names]]
     for r in results:
-        by_name = {t.name: t.status for t in r.tests}
+        by_name = {t.name: t.shown_status for t in r.tests}
         rows.append([r.student, r.version or "", r.summary, *(by_name.get(n, "-") for n in names)])
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     lines = ["  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)) for row in rows]
@@ -85,7 +85,7 @@ def diff_text(expected: str, actual: str) -> str:
 
 def describe_test(t: TestResult) -> str:
     seed = f", seed {t.seed}" if t.seed is not None else ""
-    parts = [f"--- {t.name}{seed}: {t.status}"]
+    parts = [f"--- {t.name}{seed}: {t.shown_status}"]
     if t.compare_lines is not None:
         parts.append(f"Only the first {t.compare_lines} lines of output are checked.")
     if t.input:

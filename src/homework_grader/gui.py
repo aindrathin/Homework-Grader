@@ -34,6 +34,7 @@ from .grading import (
     read_expected,
     read_input,
 )
+from .manual import ManualPasses, run_key
 from .report import hint, show_whitespace, write_csv
 from .settings import load_settings, save_settings
 from .submissions import Submission, find_submissions, open_submissions
@@ -75,6 +76,8 @@ def short_result(r: StudentResult, test_count: int) -> str:
         detail = "passed" if r.all_passed else r.tests[0].status
     else:
         detail = ""
+    if any(t.manual_pass for t in r.tests):
+        detail = f"{detail} (manual)".lstrip()
     if test_count > 1:
         return f"{r.passed}/{test_count}  {detail}".rstrip()
     return detail
@@ -109,10 +112,12 @@ def info_text(r: StudentResult, t: TestResult | None) -> str:
     parts = [f"{r.student}   ({r.version or 'no version folder'})   {r.summary}"]
     if t is not None:
         seed = f", seed {t.seed}" if t.seed is not None else ""
-        line = f"Test {t.name}{seed}: {t.status}"
+        line = f"Test {t.name}{seed}: {t.shown_status}"
         if t.compare_lines is not None:
             line += f"   (only the first {t.compare_lines} lines are checked)"
         parts.append(line)
+        if t.manual_pass:
+            parts.append(f"You marked this test as passing (the run itself was {t.status}).")
         if t.status == "FAIL" and t.expected is not None:
             h = hint(
                 first_lines(t.expected, t.compare_lines), first_lines(t.actual, t.compare_lines)
@@ -151,6 +156,9 @@ class GraderApp(tk.Tk):
         self.code_student: str | None = None  # whose code is in the code pane
         self.code_class: str | None = None  # which of their classes
         self.code_classes: list[str] = []  # the file list's classes, in order
+        self.manual = ManualPasses()  # tests marked as passing by hand (saved)
+        self.run_key: str | None = None  # which saved marks apply to the current results
+        self.compared: tuple[str, str] | None = None  # (student, test) in the comparison
         self.events: queue.Queue = queue.Queue()
         self.busy = False
 
@@ -277,6 +285,11 @@ class GraderApp(tk.Tk):
         header.pack(fill="x", pady=(6, 4))
         self.test_heading = ttk.Label(header, font=("Segoe UI", 10, "bold"))
         self.test_heading.pack(side="left")
+        self.mark_button = ttk.Button(
+            header, text="Mark test as passing", command=self._toggle_manual_pass
+        )
+        self.mark_button.pack(side="left", padx=(10, 0))
+        self.mark_button.configure(state="disabled")
         legend = ttk.Frame(header)
         legend.pack(side="right")
         for color, text in (
@@ -606,6 +619,7 @@ class GraderApp(tk.Tk):
             return
 
         self.assignment = assignment
+        self.run_key = run_key(self.assignment_var.get(), subs_path)
         self.results.clear()
         self.order.clear()
         self.submissions.clear()
@@ -706,6 +720,8 @@ class GraderApp(tk.Tk):
 
     def _update_student_row(self, r: StudentResult) -> None:
         """Show ``r`` in the student list, replacing any earlier result's test rows."""
+        if self.run_key is not None:
+            self.manual.apply(self.run_key, r)
         self.results[r.student] = r
         old_rows = self.students.get_children(r.student)
         for row in old_rows:
@@ -727,7 +743,7 @@ class GraderApp(tk.Tk):
                     "end",
                     iid=row,
                     text=f"{'✓' if t.passed else '✗'}  {t.name}",
-                    values=(t.status,),
+                    values=(t.shown_status,),
                     tags=("test_pass" if t.passed else "test_fail",),
                 )
 
@@ -813,6 +829,8 @@ class GraderApp(tk.Tk):
 
     def _mark_shown_test(self, r: StudentResult, test: TestResult | None) -> None:
         """Bold the test row being compared, and name that test above the outputs."""
+        self.compared = (r.student, test.name) if test is not None else None
+        self._update_mark_button()
         if self.shown_test and self.students.exists(self.shown_test):
             tags = tuple(t for t in self.students.item(self.shown_test, "tags") if t != "shown")
             self.students.item(self.shown_test, tags=tags)
@@ -826,9 +844,43 @@ class GraderApp(tk.Tk):
                 tags = (*self.students.item(row, "tags"), "shown")
                 self.students.item(row, tags=tags)
         self.test_heading.configure(
-            text=f"Test case: {test.name}  ({test.status})",
+            text=f"Test case: {test.name}  ({test.shown_status})",
             foreground=PASS_COLOR if test.passed else FAIL_COLOR,
         )
+
+    # ------------------------------------------------------------ manual passes
+    def _compared_test(self) -> TestResult | None:
+        if self.compared is None:
+            return None
+        student, name = self.compared
+        r = self.results.get(student)
+        return next((t for t in r.tests if t.name == name), None) if r else None
+
+    def _update_mark_button(self) -> None:
+        t = self._compared_test()
+        self.mark_button.configure(
+            text="Unmark manual pass" if t is not None and t.manual else "Mark test as passing"
+        )
+        # A test that really passed has nothing to mark (unless an old mark is still on it).
+        usable = t is not None and (t.manual or not t.passed)
+        ok = not self.busy and self.run_key is not None and usable
+        self.mark_button.configure(state="normal" if ok else "disabled")
+
+    def _toggle_manual_pass(self) -> None:
+        t = self._compared_test()
+        if self.busy or t is None or self.run_key is None or self.compared is None:
+            return
+        student, name = self.compared
+        r = self.results[student]
+        self.manual.set(self.run_key, student, r.version, name, not t.manual)
+        self._update_student_row(r)  # applies the saved marks and redraws the rows
+        # Stay on the same test (its row was rebuilt; single-test students have none).
+        row = next((k for k, v in self.test_rows.items() if v == (student, name)), student)
+        self.shown_student = None
+        self.students.selection_set(row)
+        self._show_selected()
+        done = "marked as passing" if t.manual else "no longer marked as passing"
+        self.status_var.set(f"{student}, test {name}: {done}. {r.summary}")
 
     def _fill_outputs(self, left: list[Cell], right: list[Cell]) -> None:
         for text, cells in ((self.expected_text, left), (self.actual_text, right)):
@@ -861,6 +913,8 @@ class GraderApp(tk.Tk):
         self._fill_outputs([], [])
         self.shown_test = None
         self.test_heading.configure(text="")
+        self.compared = None
+        self._update_mark_button()
 
     @staticmethod
     def _set_text(widget: tk.Text, text: str) -> None:
@@ -876,6 +930,7 @@ class GraderApp(tk.Tk):
             b.configure(state=state)
         can_rerun = not busy and self.code_class is not None
         self.rerun_button.configure(state="normal" if can_rerun else "disabled")
+        self._update_mark_button()
         if busy:
             self.progress.configure(value=0)
         self.status_var.set(status)

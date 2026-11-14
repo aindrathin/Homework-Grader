@@ -61,7 +61,15 @@ To grade an assignment:
    only in the window and never change the student's files. They are cleared when you
    click **Run grader** again or close the window. Drag the divider to make the pane
    wider or narrower.
-8. Click **Export CSV** to save the results to a spreadsheet.
+8. To count a test as passed even though the output didn't match (for example, a small
+   difference you accept), open that test and click **Mark test as passing** above the
+   outputs. The test then shows `PASS (manual)`, counts toward the student's passed tests,
+   and the summary and CSV say `(manual)`. Click **Unmark manual pass** to undo it. Marks
+   are saved on this computer and come back when you grade the same assignment and
+   submissions again, even after closing the window. A mark only applies to the version of
+   the student's work you marked; a newer submission is graded without it. Tests that never
+   ran (such as a compile error) can't be marked: fix the code and rerun first.
+9. Click **Export CSV** to save the results to a spreadsheet.
 
 ### Command line
 
