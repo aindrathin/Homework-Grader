@@ -8,6 +8,9 @@ Layout::
                                  required_classes = ["DiceRoller", "Die"]  (optional)
                                  compare_lines = 29   (optional: check only the first
                                                        29 lines of output)
+                                 submission_folder = "Assignment_ Song"  (optional: the
+                                     folder inside each student's folder that holds
+                                     this assignment's version folders)
         reference/               the teacher's solution (.java), used to generate expected output
         tests/
             <test name>/
@@ -47,6 +50,7 @@ class Assignment:
     required_classes: list[str]
     tests: list[TestCase]
     compare_lines: int | None = None  # None: compare all output
+    submission_folder: str | None = None  # None: version folders sit right under the student
 
     @property
     def reference_dir(self) -> Path:
@@ -75,6 +79,11 @@ def load_assignment(root: Path) -> Assignment:
         not isinstance(compare_lines, int) or isinstance(compare_lines, bool) or compare_lines < 1
     ):
         raise AssignmentError("compare_lines in assignment.toml must be a whole number above 0")
+    submission_folder = config.get("submission_folder")
+    if submission_folder is not None and (
+        not isinstance(submission_folder, str) or not submission_folder.strip()
+    ):
+        raise AssignmentError("submission_folder in assignment.toml must be a folder name")
 
     return Assignment(
         name=root.name,
@@ -84,6 +93,7 @@ def load_assignment(root: Path) -> Assignment:
         required_classes=required,
         tests=_load_tests(root / "tests"),
         compare_lines=compare_lines,
+        submission_folder=submission_folder,
     )
 
 

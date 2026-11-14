@@ -6,3 +6,7 @@ timeout_seconds = 5         # stop a program that runs longer than this
 # Prompts and answers share a line (typed input isn't echoed), so every test's
 # output is 18 lines before the message, whatever the input.
 compare_lines = 18
+
+# In the Teams export, each student folder has one folder per assignment;
+# this assignment's version folders are inside this one.
+submission_folder = "Gradanator"

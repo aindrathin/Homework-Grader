@@ -11,6 +11,10 @@ had written ``Random r = new Random(7);`` and used ``r`` everywhere.
 
 Package declarations are also removed so every class lives in the default
 package and can be run as ``java -cp classes MainClass``.
+
+Classes can also be renamed (``renames``), for a student who named their class
+``SongNew`` or ``song`` when the assignment needs ``Song``. Only the temporary
+copy is changed; the student's own files are never edited.
 """
 
 from __future__ import annotations
@@ -60,13 +64,22 @@ class RewriteResult:
     notes: list[str] = field(default_factory=list)
 
 
-def rewrite_source(src: str, *, seed_random_class: bool = True) -> RewriteResult:
+def rewrite_source(
+    src: str, *, seed_random_class: bool = True, renames: dict[str, str] | None = None
+) -> RewriteResult:
     """Return a seeded, package-free copy of one Java source file.
 
     ``seed_random_class`` should be False when the student wrote their own class
     named ``Random``, because then ``new Random()`` is not ``java.util.Random``.
+    ``renames`` maps a class name the student used to the name the assignment
+    needs; the name is replaced wherever it appears in code (not comments or strings).
     Line numbers are preserved so compiler errors still point at the right line.
     """
+    rename_re = (
+        re.compile(r"(?<![\w$])(" + "|".join(map(re.escape, renames)) + r")(?![\w$])")
+        if renames
+        else None
+    )
     segments = split_segments(src)
     notes: list[str] = []
 
@@ -98,6 +111,8 @@ def rewrite_source(src: str, *, seed_random_class: bool = True) -> RewriteResult
                 text = _PACKAGE.sub(blank, text)
                 own_import = rf"\bimport\s+{re.escape(package)}\s*\.\s*(?:\w+|\*)\s*;"
                 text = re.sub(own_import, blank, text)
+            if rename_re:
+                text = rename_re.sub(lambda m: renames[m.group(1)], text)
             text = _MATH_RANDOM.sub(count("math", f"{SHARED}.nextDouble()"), text)
             if seed_random_class:
                 text = _NEW_RANDOM.sub(count("new", SHARED), text)

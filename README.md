@@ -123,7 +123,8 @@ Create a folder inside `assignments\`:
 ```
 MyAssignment/
     assignment.toml      main_class = "Main"
-                         (optional: timeout_seconds, required_classes, compare_lines)
+                         (optional: timeout_seconds, required_classes, compare_lines,
+                          submission_folder)
     reference/           your solution's .java files
     tests/
         test1/
@@ -165,6 +166,16 @@ so assignment instructions should say exactly which formula to use.
 The grader expects `submittedWork/<student>/<version folder>/*.java`. It grades only the
 version folder with the highest number, and recognizes files Teams renamed (such as
 `Main 1.java`) by the class declared inside them.
+
+Some exports give each student one folder per assignment instead, like
+`<student>/Assignment_ Song/<version folder>/*.java`. For those, set the assignment's folder
+name in `assignment.toml`, for example `submission_folder = "Assignment_ Song"`. Students
+without that folder are listed as NO SUBMISSION.
+
+If a required class is missing but the student wrote exactly one class with a similar name
+(for example `song`, `SongNew`, or `Songshs` instead of `Song`), the grader renames it in its
+temporary copy so the work can still be graded. The result shows "(renamed)" and the details
+say which class was renamed. The student's own files are never changed.
 
 ## Safety
 

@@ -261,3 +261,18 @@ def test_gradanator_catches_mistakes(tmp_path, change, failing):
     r = grade_submission(a, _gradanator_student(tmp_path, changed))
     assert {t.name for t in r.tests if t.status != PASS} == failing
     assert {t.status for t in r.tests if t.status != PASS} <= {FAIL}
+
+
+@pytest.mark.parametrize("student_class", ["SongNew", "song", "Songshs"])
+def test_similar_class_name_is_renamed_for_grading(tmp_path, student_class):
+    a = load_assignment(SONG)
+    src = (SONG / "reference" / "Song.java").read_text().replace("Song", student_class)
+    original = tmp_path / f"{student_class} 1.java"
+    original.write_text(src)
+    sub = Submission("Sam", "Version 1", {student_class: original})
+    r = grade_submission(a, sub)
+    assert [t.status for t in r.tests] == [PASS]
+    assert r.renamed == {student_class: "Song"}
+    assert r.summary == "1/1 passed (renamed)"
+    assert any(f"Renamed class {student_class} to Song" in n for n in r.notes)
+    assert original.read_text() == src  # the student's file is never edited
