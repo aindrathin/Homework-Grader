@@ -1,0 +1,8 @@
+# Settings for this assignment.
+main_class = "Gradanator"   # class whose main method is run
+timeout_seconds = 5         # stop a program that runs longer than this
+
+# The last line is each student's own grade message, so it isn't graded.
+# Prompts and answers share a line (typed input isn't echoed), so every test's
+# output is 18 lines before the message, whatever the input.
+compare_lines = 18
