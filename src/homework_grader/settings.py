@@ -10,10 +10,14 @@ import os
 from pathlib import Path
 
 
-def settings_path() -> Path:
+def app_data_dir() -> Path:
+    """The grader's own folder for files it keeps between runs."""
     base = os.environ.get("APPDATA")
-    folder = Path(base) / "HomeworkGrader" if base else Path.home() / ".homework_grader"
-    return folder / "settings.json"
+    return Path(base) / "HomeworkGrader" if base else Path.home() / ".homework_grader"
+
+
+def settings_path() -> Path:
+    return app_data_dir() / "settings.json"
 
 
 def load_settings(path: Path | None = None) -> dict[str, str]:

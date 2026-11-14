@@ -61,10 +61,21 @@ class TestResult:
     compare_lines: int | None = None  # only this many lines were compared
     input: str | None = None  # what was typed into the program (input.txt), if anything
     input_reads: Reads | None = None  # where in ``actual`` each piece of input was read
+    manual: bool = False  # the teacher marked this test as passing by hand
 
     @property
     def passed(self) -> bool:
-        return self.status == PASS
+        return self.status == PASS or self.manual
+
+    @property
+    def manual_pass(self) -> bool:
+        """Passing only because the teacher marked it (the run itself didn't pass)."""
+        return self.manual and self.status != PASS
+
+    @property
+    def shown_status(self) -> str:
+        """The status to show and export: a manual pass reads "PASS (manual)"."""
+        return f"{PASS} (manual)" if self.manual_pass else self.status
 
 
 @dataclass
@@ -94,6 +105,8 @@ class StudentResult:
             summary += " (renamed)"
         if self.edited:
             summary += " (edited)"
+        if any(t.manual_pass for t in self.tests):
+            summary += " (manual)"
         return summary
 
     @property
