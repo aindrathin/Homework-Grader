@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import queue
 import threading
 import tkinter as tk
@@ -36,6 +37,7 @@ from .grading import (
 )
 from .manual import ManualPasses, run_key
 from .report import hint, show_whitespace, write_csv
+from .saved_state import SavedEdits, SavedSession, StudentNotes, fingerprint
 from .settings import load_settings, save_settings
 from .submissions import Submission, find_submissions, open_submissions
 
@@ -151,8 +153,16 @@ class GraderApp(tk.Tk):
         self.shown_student: str | None = None
         self.assignment: Assignment | None = None  # the one last graded
         self.submissions: dict[str, Submission] = {}
-        # Teacher's edits, kept only in memory: student -> class -> source text.
+        # Teacher's edits: student -> class -> source text (also saved, see saved_state.py).
         self.edits: dict[str, dict[str, str]] = {}
+        self.saved_edits = SavedEdits()
+        self.notes = StudentNotes()  # the teacher's notes on each student (saved)
+        self.notes_student: str | None = None  # whose note is in the notes box
+        self.notes_save_job: str | None = None  # pending autosave of the notes box
+        self.session = SavedSession()  # the last grading run, restored on start
+        self.graded_name: str | None = None  # assignment name of the current results
+        self.graded_path: Path | None = None  # submissions of the current results
+        self.stamp: str | None = None  # fingerprint of the assignment + submissions graded
         self.code_student: str | None = None  # whose code is in the code pane
         self.code_class: str | None = None  # which of their classes
         self.code_classes: list[str] = []  # the file list's classes, in order
@@ -166,7 +176,15 @@ class GraderApp(tk.Tk):
         self._restore_choices()
         self.assignment_var.trace_add("write", lambda *_: self._save_choices())
         self.submissions_var.trace_add("write", lambda *_: self._save_choices())
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll)
+        self.after(150, self._restore_session)
+
+    def _on_close(self) -> None:
+        """Save the code being edited and the note being typed, then close."""
+        self._store_code_edit()
+        self._store_note()
+        self.destroy()
 
     # ---------------------------------------------------------- remembered choices
     def _restore_choices(self) -> None:
@@ -184,6 +202,57 @@ class GraderApp(tk.Tk):
                 "assignment": self.assignment_var.get(),
                 "submissions": self.submissions_var.get().strip(),
             }
+        )
+
+    # ------------------------------------------------------------- saved session
+    def _save_session(self) -> None:
+        """Save the current results so reopening the window shows them without grading."""
+        if self.stamp is None or self.graded_name is None or self.graded_path is None:
+            return
+        self.session.save(
+            self.graded_name,
+            self.graded_path,
+            self.stamp,
+            [self.submissions[s] for s in self.order if s in self.submissions],
+            [self.results[s] for s in self.order if s in self.results],
+        )
+
+    def _restore_session(self) -> None:
+        """Show the last grading run again, if its assignment and submissions haven't changed."""
+        saved = self.session.load()
+        if saved is None or self.busy or self.results:
+            return
+        name, path = saved["assignment"], saved["submissions"]
+        folder = self.assignments.get(name)
+        if folder is None or not path.exists():
+            return
+        try:
+            assignment = load_assignment(folder)
+            unchanged = fingerprint(assignment.root, path) == saved["fingerprint"]
+        except Exception:
+            return
+        if not unchanged:
+            self.status_var.set(
+                f"{name} or its submissions changed since they were last graded. "
+                "Press Run grader to grade them again."
+            )
+            return
+        self.assignment_var.set(name)
+        self.submissions_var.set(str(path))
+        self.assignment = assignment
+        self.graded_name, self.graded_path = name, path
+        self.run_key = run_key(name, path)
+        self.stamp = saved["fingerprint"]
+        results: list[StudentResult] = saved["results"]
+        self._on_students(saved["submissions_list"])
+        for r in results:
+            if r.student in self.submissions:
+                self._update_student_row(r)
+        self.progress.configure(value=len(results))
+        full = sum(r.all_passed for r in results)
+        self.status_var.set(
+            f"Restored the last grading of {name}: {full} of {len(results)} students passed "
+            "every test. Press Run grader to grade again."
         )
 
     def _picker_start_dir(self) -> str | None:
@@ -234,7 +303,10 @@ class GraderApp(tk.Tk):
 
         body = ttk.PanedWindow(self, orient="horizontal")
         body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        body.add(self._build_student_list(body), weight=0)
+        left = ttk.PanedWindow(body, orient="vertical")
+        body.add(left, weight=0)
+        left.add(self._build_student_list(left), weight=1)
+        left.add(self._build_notes(left), weight=0)
 
         right = ttk.PanedWindow(body, orient="vertical")
         body.add(right, weight=1)
@@ -278,6 +350,61 @@ class GraderApp(tk.Tk):
         scroll.pack(side="right", fill="y")
         self.info.pack(side="left", fill="both", expand=True)
         return frame
+
+    def _build_notes(self, parent) -> ttk.Frame:
+        frame = ttk.Frame(parent, padding=(0, 6, 0, 0))
+        self.notes_heading = ttk.Label(frame, font=("Segoe UI", 10, "bold"))
+        self.notes_heading.pack(anchor="w")
+        box = ttk.Frame(frame)
+        box.pack(fill="both", expand=True, pady=(2, 0))
+        self.notes_text = tk.Text(box, height=8, width=30, wrap="word", font=("Segoe UI", 10))
+        scroll = ttk.Scrollbar(box, orient="vertical", command=self.notes_text.yview)
+        self.notes_text.configure(yscrollcommand=scroll.set, undo=True)
+        scroll.pack(side="right", fill="y")
+        self.notes_text.pack(side="left", fill="both", expand=True)
+        self.notes_text.bind("<<Modified>>", self._note_changed)
+        self.notes_text.bind("<FocusOut>", lambda _e: self._store_note())
+        self._show_note(None)
+        return frame
+
+    # ------------------------------------------------------------------- notes
+    def _show_note(self, student: str | None) -> None:
+        """Put ``student``'s saved note in the notes box (saving the one shown before)."""
+        if student is not None and student == self.notes_student:
+            return
+        self._store_note()
+        self.notes_student = student
+        self.notes_text.configure(state="normal")
+        self.notes_text.delete("1.0", "end")
+        if student is None or self.graded_name is None:
+            self.notes_student = None
+            self.notes_heading.configure(text="Notes")
+            self.notes_text.insert("1.0", "Choose a student to take notes.")
+            self.notes_text.configure(state="disabled", foreground=MUTED)
+        else:
+            self.notes_heading.configure(text=f"Notes on {student}")
+            self.notes_text.insert("1.0", self.notes.get(self.graded_name, student))
+            self.notes_text.configure(foreground="black")
+        self.notes_text.edit_reset()
+        self.notes_text.edit_modified(False)
+
+    def _note_changed(self, _event=None) -> None:
+        """Save the note shortly after typing stops."""
+        if not self.notes_text.edit_modified():
+            return
+        self.notes_text.edit_modified(False)
+        if self.notes_save_job is not None:
+            self.after_cancel(self.notes_save_job)
+        self.notes_save_job = self.after(1000, self._store_note)
+
+    def _store_note(self) -> None:
+        if self.notes_save_job is not None:
+            self.after_cancel(self.notes_save_job)
+            self.notes_save_job = None
+        if self.notes_student is None or self.graded_name is None:
+            return
+        text = self.notes_text.get("1.0", "end-1c")
+        self.notes.set(self.graded_name, self.notes_student, text)
 
     def _build_compare(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent)
@@ -346,7 +473,7 @@ class GraderApp(tk.Tk):
         self.code_state.pack(anchor="w")
         ttk.Label(
             frame,
-            text="Edits stay in this window; the student's file is never changed.",
+            text="Edits are saved by the grader; the student's file is never changed.",
             foreground=MUTED,
         ).pack(anchor="w", pady=(0, 4))
 
@@ -456,6 +583,14 @@ class GraderApp(tk.Tk):
             edits[cls] = text
         if not edits:
             del self.edits[student]
+        self._persist_edits(student)
+
+    def _persist_edits(self, student: str) -> None:
+        """Save ``student``'s edits (for the version graded) so they survive closing the window."""
+        sub = self.submissions.get(student)
+        if self.run_key is None or sub is None:
+            return
+        self.saved_edits.set(self.run_key, student, sub.version, self.edits.get(student, {}))
 
     def _update_code_state(self) -> None:
         student, cls = self.code_student, self.code_class
@@ -546,6 +681,7 @@ class GraderApp(tk.Tk):
         self.edits.get(student, {}).pop(cls, None)
         if not self.edits.get(student):
             self.edits.pop(student, None)
+        self._persist_edits(student)
         self._show_code_file(cls)
 
     def _rerun_student(self) -> None:
@@ -618,12 +754,21 @@ class GraderApp(tk.Tk):
             messagebox.showerror("Submissions", "Choose a submissions .zip file or folder.")
             return
 
+        self._store_code_edit()
+        self._store_note()
+        self._show_note(None)
         self.assignment = assignment
-        self.run_key = run_key(self.assignment_var.get(), subs_path)
+        self.graded_name = self.assignment_var.get()
+        self.graded_path = subs_path
+        self.run_key = run_key(self.graded_name, subs_path)
+        self.stamp = None
+        self.session.clear()  # an unfinished run must not restore the old results
         self.results.clear()
         self.order.clear()
         self.submissions.clear()
         self.edits.clear()
+        # Saved edits are graded too (only those made to the version being graded).
+        saved_edits = copy.deepcopy(self.saved_edits.data.get(self.run_key, {}))
         self.code_student = None
         self._show_code_message("Choose a student to see their code.")
         self.students.delete(*self.students.get_children())
@@ -633,13 +778,23 @@ class GraderApp(tk.Tk):
 
         def work() -> None:
             try:
+                try:
+                    stamp = fingerprint(assignment.root, subs_path)
+                except OSError:
+                    stamp = None  # grade anyway; the run just won't be restored later
                 with open_submissions(subs_path) as root:
                     subs = find_submissions(root, assignment.submission_folder)
                     self.events.put(("students", subs))
+                    to_grade = [
+                        edited_submission(
+                            s, saved_edits.get(s.student, {}).get(s.version or "", {})
+                        )
+                        for s in subs
+                    ]
                     results = grade_all(
-                        assignment, subs, on_result=lambda r: self.events.put(("result", r))
+                        assignment, to_grade, on_result=lambda r: self.events.put(("result", r))
                     )
-                self.events.put(("done", results))
+                self.events.put(("done", (results, stamp)))
             except Exception as e:
                 self.events.put(("error", str(e)))
 
@@ -697,6 +852,15 @@ class GraderApp(tk.Tk):
     def _on_students(self, subs) -> None:
         self.order = [s.student for s in subs]
         self.submissions = {s.student: s for s in subs}
+        if self.run_key is not None:
+            # Edits to an older version are dropped; the latest version's come back.
+            self.saved_edits.keep_versions(self.run_key, {s.student: s.version for s in subs})
+            self.edits = {}
+            for s in subs:
+                saved = self.saved_edits.get(self.run_key, s.student, s.version)
+                saved = {c: text for c, text in saved.items() if c in s.files}
+                if saved:
+                    self.edits[s.student] = saved
         for s in subs:
             self.students.insert("", "end", iid=s.student, text=s.student, values=("waiting…",))
         self.progress.configure(maximum=max(1, len(subs)), value=0)
@@ -710,6 +874,7 @@ class GraderApp(tk.Tk):
 
     def _on_rerun(self, r: StudentResult) -> None:
         self._update_student_row(r)
+        self._save_session()
         self._set_busy(False, f"Reran {r.student}: {r.summary}")
         # Show the new result (this also rebuilds the test rows that were replaced).
         self.shown_student = None
@@ -747,7 +912,9 @@ class GraderApp(tk.Tk):
                     tags=("test_pass" if t.passed else "test_fail",),
                 )
 
-    def _on_done(self, results: list[StudentResult]) -> None:
+    def _on_done(self, payload: tuple[list[StudentResult], str | None]) -> None:
+        results, self.stamp = payload
+        self._save_session()
         full = sum(r.all_passed for r in results)
         self._set_busy(False, f"Done. {full} of {len(results)} students passed every test.")
         if results and not self.students.selection():
@@ -782,6 +949,7 @@ class GraderApp(tk.Tk):
             test = next((t for t in r.tests if not t.passed), r.tests[0] if r.tests else None)
         self.shown_student = student
         self._load_code(student)
+        self._show_note(student)
         self._expand_only(student)
         self._mark_shown_test(r, test)
 
