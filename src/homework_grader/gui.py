@@ -35,6 +35,7 @@ from .grading import (
     read_input,
 )
 from .report import hint, show_whitespace, write_csv
+from .settings import load_settings, save_settings
 from .submissions import Submission, find_submissions, open_submissions
 
 ALL_PASSED_BG = "#c6efce"  # student list: every test passed
@@ -154,7 +155,36 @@ class GraderApp(tk.Tk):
         self.busy = False
 
         self._build()
+        self._restore_choices()
+        self.assignment_var.trace_add("write", lambda *_: self._save_choices())
+        self.submissions_var.trace_add("write", lambda *_: self._save_choices())
         self.after(100, self._poll)
+
+    # ---------------------------------------------------------- remembered choices
+    def _restore_choices(self) -> None:
+        """Put back the assignment and submissions chosen the last time the window was used."""
+        saved = load_settings()
+        if saved.get("assignment") in self.assignments:
+            self.assignment_var.set(saved["assignment"])
+        submissions = saved.get("submissions", "")
+        if submissions and Path(submissions).exists():
+            self.submissions_var.set(submissions)
+
+    def _save_choices(self) -> None:
+        save_settings(
+            {
+                "assignment": self.assignment_var.get(),
+                "submissions": self.submissions_var.get().strip(),
+            }
+        )
+
+    def _picker_start_dir(self) -> str | None:
+        """Where the file pickers open: next to the last submissions, if that still exists."""
+        text = self.submissions_var.get().strip()
+        if not text:
+            return None
+        folder = Path(text).parent  # the folder holding the last .zip or submissions folder
+        return str(folder) if folder.is_dir() else None
 
     # ----------------------------------------------------------------- layout
     def _build(self) -> None:
@@ -536,13 +566,17 @@ class GraderApp(tk.Tk):
 
     def _pick_zip(self) -> None:
         path = filedialog.askopenfilename(
-            title="Choose the Teams submissions .zip", filetypes=[("Zip files", "*.zip")]
+            title="Choose the Teams submissions .zip",
+            filetypes=[("Zip files", "*.zip")],
+            initialdir=self._picker_start_dir(),
         )
         if path:
             self.submissions_var.set(path)
 
     def _pick_folder(self) -> None:
-        path = filedialog.askdirectory(title="Choose the extracted submissions folder")
+        path = filedialog.askdirectory(
+            title="Choose the extracted submissions folder", initialdir=self._picker_start_dir()
+        )
         if path:
             self.submissions_var.set(path)
 
