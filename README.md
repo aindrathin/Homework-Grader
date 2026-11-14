@@ -38,7 +38,7 @@ To grade an assignment:
 1. Download the submissions from Teams as a .zip. You don't need to extract it.
 2. Pick the assignment from the dropdown. The list shows every folder in `assignments\` that
    has an `assignment.toml`. After adding a new assignment, click **Refresh**.
-3. Click **Zip…** to choose the .zip, or **Folder…** to choose a folder you already extracted.
+3. Click **Folder…** to choose a folder you already extracted, or **Zip…** to choose the .zip.
 4. If the assignment has no `expected.txt` files yet, click **Generate expected output**.
 5. Click **Run grader**. Every student's name appears in the list on the left. The list fills
    in as students finish, and several students are graded at once. A green row passed every
