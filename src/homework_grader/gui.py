@@ -9,7 +9,18 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .assignment import Assignment, load_assignment
-from .compare import DIFF, EXTRA_BLANK, FILLER, MARKER, SAME, UNCHECKED, Cell, align, split_lines
+from .compare import (
+    DIFF,
+    EXTRA_BLANK,
+    FILLER,
+    INPUT,
+    MARKER,
+    SAME,
+    UNCHECKED,
+    Cell,
+    align,
+    input_cells,
+)
 from .grading import (
     GRADED,
     StudentResult,
@@ -18,6 +29,7 @@ from .grading import (
     generate_expected,
     grade_all,
     read_expected,
+    read_input,
 )
 from .report import hint, show_whitespace, write_csv
 from .submissions import find_submissions, open_submissions
@@ -31,6 +43,7 @@ DIFF_BG = "#ffc9c9"  # red: differing line
 BLANK_BG = "#fff176"  # yellow: extra blank line
 FILLER_BG = "#ececec"  # gray: no line on this side
 MUTED = "#8a8a8a"
+INPUT_COLOR = "#1f5fa8"  # blue: input typed into the program (also bold, underlined)
 MONO = ("Consolas", 10)
 
 # The repo's assignments/ folder (src/homework_grader/gui.py -> repo root).
@@ -253,6 +266,7 @@ class GraderApp(tk.Tk):
         text.tag_configure(FILLER, background=FILLER_BG)
         text.tag_configure(UNCHECKED, foreground=MUTED)
         text.tag_configure(MARKER, foreground=MUTED, font=(*MONO, "italic"))
+        text.tag_configure(INPUT, foreground=INPUT_COLOR, font=(*MONO, "bold"), underline=True)
         text.tag_raise("lineno")
         text.bind("<MouseWheel>", self._wheel)
         return text
@@ -458,24 +472,36 @@ class GraderApp(tk.Tk):
             self._show_without_output(r)
             return
         if test.expected is None:
-            rows = align("", test.actual)
+            rows = align("", test.actual, actual_reads=test.input_reads)
             self._fill_outputs(
                 [Cell("(no expected.txt for this test)", MARKER)],
                 [row.actual for row in rows],
             )
             return
-        rows = align(test.expected, test.actual, test.compare_lines)
-        self._fill_outputs([row.expected for row in rows], [row.actual for row in rows])
+        expected_reads = r.expected_reads.get(test.name)
+        rows = align(
+            test.expected, test.actual, test.compare_lines, expected_reads, test.input_reads
+        )
+        left = [row.expected for row in rows]
+        right = [row.actual for row in rows]
+        if expected_reads is None:
+            # Where the reference read its input isn't known: list the input above
+            # the expected output, with blank space on the student side to stay lined up.
+            header = input_cells(test.input)
+            left = [*header, *left]
+            right = [Cell(None, FILLER) for _ in header] + right
+        self._fill_outputs(left, right)
 
     def _show_without_output(self, r: StudentResult) -> None:
         """The student's code never ran (e.g. compile error): expected output on the left."""
         tests = self.assignment.tests if self.assignment else []
-        expected = read_expected(tests[0].expected_path) if tests else None
+        expected = (read_expected(tests[0].expected_path) if tests else None) or ""
         limit = self.assignment.compare_lines if self.assignment else None
-        left = [
-            Cell(line, UNCHECKED if limit and i > limit else SAME, i)
-            for i, line in enumerate(split_lines(expected or ""), 1)
-        ]
+        reads = r.expected_reads.get(tests[0].name) if tests else None
+        # Aligning the expected output with itself gives its lines, input and gray parts.
+        left = [row.expected for row in align(expected, expected, limit, reads, reads)]
+        if reads is None and tests:
+            left = [*input_cells(read_input(tests[0].input_path)), *left]
         self._fill_outputs(left, [Cell(f"(no output: {r.status})", MARKER)])
 
     def _expand_only(self, student: str) -> None:
@@ -508,12 +534,21 @@ class GraderApp(tk.Tk):
             text.delete("1.0", "end")
             for cell in cells:
                 number = f"{cell.number:>3}  " if cell.number is not None else "     "
-                text.insert("end", number, ("lineno", cell.kind))
+                # The line's kind (its color) applies everywhere except on listed-input
+                # lines, so their underline stays on the text.
+                line_tags = () if cell.kind == INPUT else (cell.kind,)
+                text.insert("end", number, ("lineno", *line_tags))
                 body = "" if cell.text is None else cell.text
                 if cell.kind in (SAME, DIFF, EXTRA_BLANK, UNCHECKED):
-                    body = show_whitespace(body)
+                    body = show_whitespace(body)  # same length, so input spans still fit
+                # Typed-in input is bold, underlined and blue; printed output is plain.
+                pos = 0
+                for start, end in cell.inputs:
+                    text.insert("end", body[pos:start], line_tags)
+                    text.insert("end", body[start:end], (*line_tags, INPUT))
+                    pos = end
                 # Tagging the newline too colors the line all the way across.
-                text.insert("end", body + "\n", (cell.kind,))
+                text.insert("end", body[pos:] + "\n", line_tags)
             text.configure(state="disabled")
         self.expected_text.yview_moveto(0)
         self.actual_text.yview_moveto(0)

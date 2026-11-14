@@ -17,6 +17,7 @@ from homework_grader.grading import (
     find_java_tool,
     generate_expected,
     grade_submission,
+    reference_reads,
 )
 from homework_grader.submissions import Submission
 
@@ -78,6 +79,29 @@ def assignment(tmp_path: Path):
 def test_reference_passes_its_own_tests(tmp_path, assignment):
     r = grade_submission(assignment, _student(tmp_path, REFERENCE))
     assert [t.status for t in r.tests] == [PASS, PASS]
+
+
+def test_input_is_recorded_where_it_was_read(tmp_path, assignment):
+    r = grade_submission(assignment, _student(tmp_path, REFERENCE))
+    t = r.tests[0]
+    assert t.input_reads == [(len("How many? "), "3\n")]
+    # The output itself has no input in it: the first die roll follows the prompt.
+    assert t.actual.startswith("How many? ") and t.actual[10] in "123456"
+
+
+def test_reference_reads_are_found_for_the_expected_side(assignment):
+    assert reference_reads(assignment) == {
+        "a": [(len("How many? "), "3\n")],
+        "b": [(len("How many? "), "5\n")],
+    }
+
+
+def test_errors_do_not_mention_the_launcher(tmp_path, assignment):
+    src = REFERENCE.replace("int n = in.nextInt();", "int n = in.nextInt(); n = 1 / 0;")
+    r = grade_submission(assignment, _student(tmp_path, src))
+    err = r.tests[0].stderr
+    assert "ArithmeticException" in err and "at Roller.main" in err
+    assert "Launcher" not in err and "reflect" not in err
 
 
 def test_different_seeds_give_different_expected_output(assignment):
