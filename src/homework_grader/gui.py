@@ -137,8 +137,8 @@ class GraderApp(tk.Tk):
         ttk.Entry(top, textvariable=self.submissions_var).grid(row=1, column=1, sticky="ew", padx=6)
         pick = ttk.Frame(top)
         pick.grid(row=1, column=2)
-        ttk.Button(pick, text="Zip…", command=self._pick_zip).pack(side="left")
-        ttk.Button(pick, text="Folder…", command=self._pick_folder).pack(side="left", padx=(4, 0))
+        ttk.Button(pick, text="Folder…", command=self._pick_folder).pack(side="left")
+        ttk.Button(pick, text="Zip…", command=self._pick_zip).pack(side="left", padx=(4, 0))
 
         actions = ttk.Frame(self, padding=(10, 0))
         actions.pack(fill="x")
